@@ -1,5 +1,5 @@
 # llmware RAG 챗봇 
-# ========== 1. 라이브러리 생성 및 문서 파싱 ==========
+# ========== 1. 라이브러리 생성 및 csv 파일 파싱 ==========
 from llmware.library import Library
 from llmware.retrieval import Query
 from llmware.models import ModelCatalog
@@ -8,8 +8,8 @@ from llmware.configs import LLMWareConfig, MilvusConfig
 from llmware.prompts import Prompt
 import os
 
-def prepare_library(library_name="my_library", document_folder="/content/"):
-    """ 라이브러리 생성 + 샘플 문서 파싱하는 함수 """
+def prepare_library(library_name="my_library", document_folder="my_csv_folder"):
+    """ 라이브러리 생성 + 폴더 안 csv 파일 파싱하는 함수 """
     # DB 설정
     LLMWareConfig().set_active_db("sqlite")
     
@@ -19,9 +19,9 @@ def prepare_library(library_name="my_library", document_folder="/content/"):
     library = Library().create_new_library(library_name)
     print(f" 라이브러리 '{library_name}' 생성 완료.")
 
-    # 파일 추가 및 파싱
+    # 폴더 안 파일들 추가
     parsing_output = library.add_files(ingestion_folder_path)
-    print(f" 문서 파싱 완료: {parsing_output}")
+    print(f" CSV 파싱 완료: {parsing_output}")
 
     return library
 
@@ -73,7 +73,7 @@ def start_chatbot(library_name, model_name="bling-answer-tool"):
 # ========== 4. 전체 실행 ==========
 if __name__ == "__main__":
     library_name = "my_library"  # 원하는 이름
-    document_folder = "SmallLibrary"  # 사용할 문서 폴더
+    document_folder =  "my_csv_folder"  # 폴더 이름으로 수정
     embedding_model = "mini-lm-sbert"  # 사용할 임베딩 모델
     llm_model_name = "bling-answer-tool"  # 사용할 LLM 모델
 
