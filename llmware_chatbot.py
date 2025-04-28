@@ -6,6 +6,7 @@ from llmware.models import ModelCatalog
 from llmware.setup import Setup
 from llmware.configs import LLMWareConfig, MilvusConfig
 from llmware.prompts import Prompt
+from segmantic_rag import semantic_rag
 import os
 
 def prepare_library(library_name="my_library", document_folder="my_csv_folder"):
@@ -83,5 +84,12 @@ if __name__ == "__main__":
     # 2단계: 벡터 임베딩 생성
     install_embeddings(library, embedding_model)
 
-    # 3단계: 챗봇 실행
-    start_chatbot(library_name, llm_model_name)
+    # 3단계: 챗봇 실행 (둘 중 선택)
+    mode = input("모드 선택 (1: 기본 챗봇 / 2: Semantic Query 강화 챗봇): ")
+
+    if mode == "1":
+        start_chatbot(library_name, llm_model_name)
+    elif mode == "2":
+        semantic_rag(library_name, llm_model_name)
+    else:
+        print("올바른 모드를 선택하세요.")
