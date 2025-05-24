@@ -1,13 +1,13 @@
 from fastapi import FastAPI
-from models.user import UserProfile, ChatRequest
-from services.user_service import save_user_profile, load_user_profile
-from services.context_builder import build_user_context
-from config.llm_config import model, query_engine
-from models.response.base_response import response, BaseResponse
-from utils.constants.error_codes import ErrorCode
-from utils.app_exception import AppException
+from app.models.user import UserProfile, ChatRequest
+from app.services.user_service import save_user_profile, load_user_profile
+from app.services.context_builder import build_user_context
+from app.config.llm_config import model, query_engine
+from app.models.response.base_response import response, BaseResponse
+from app.utils.constants.error_codes import ErrorCode
+from app.utils.app_exception import AppException
 from fastapi.exceptions import RequestValidationError
-from utils.exception_handler import (
+from app.utils.exception_handler import (
     app_exception_handler,
     generic_exception_handler,
     validation_exception_handler

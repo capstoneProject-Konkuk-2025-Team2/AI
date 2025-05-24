@@ -1,4 +1,4 @@
-from utils.constants.error_codes import ErrorCode
+from app.utils.constants.error_codes import ErrorCode
 
 class AppException(Exception):
     def __init__(self, error: ErrorCode):

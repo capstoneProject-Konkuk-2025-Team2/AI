@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, Any
-from utils.constants.error_codes import ErrorCode
+from app.utils.constants.error_codes import ErrorCode
 
 class BaseResponse(BaseModel):
     code: int

@@ -6,10 +6,10 @@ from llmware.models import ModelCatalog
 from llmware.setup import Setup
 from llmware.configs import LLMWareConfig, MilvusConfig
 from llmware.prompts import Prompt
-from segmantic_rag import semantic_rag
+from app.segmantic_rag import semantic_rag
 import os
 
-def prepare_library(library_name="my_library", document_folder="my_csv_folder"):
+def prepare_library(library_name="my_library", document_folder="app/my_csv_folder"):
     """ 라이브러리 생성 + 폴더 안 csv 파일 파싱하는 함수 """
     # DB 설정
     LLMWareConfig().set_active_db("sqlite")

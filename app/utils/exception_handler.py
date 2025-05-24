@@ -1,8 +1,8 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from models.response.base_response import error_response
-from utils.app_exception import AppException
-from utils.constants.error_codes import ErrorCode
+from app.models.response.base_response import error_response
+from app.utils.app_exception import AppException
+from app.utils.constants.error_codes import ErrorCode
 from fastapi.exceptions import RequestValidationError
 
 def app_exception_handler(request: Request, exc: AppException):
