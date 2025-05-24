@@ -3,23 +3,35 @@ from models.user import UserProfile, ChatRequest
 from services.user_service import save_user_profile, load_user_profile
 from services.context_builder import build_user_context
 from config.llm_config import model, query_engine
-from models.response import response
-from models.response import BaseResponse
+from models.response.base_response import response, BaseResponse
 from utils.constants.error_codes import ErrorCode
 from utils.app_exception import AppException
+from fastapi.exceptions import RequestValidationError
 from utils.exception_handler import (
     app_exception_handler,
-    generic_exception_handler
+    generic_exception_handler,
+    validation_exception_handler
 )
 app = FastAPI()
 
 # 에외 핸들러 등록
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 # TODO: 성공 응답 DTO도 정할지 고민
-@app.post("/register/{user_id}", response_model=BaseResponse)
+@app.post("/register/{user_id}", response_model=BaseResponse,
+    responses={
+        422: {
+            "model": BaseResponse,
+            "description": ErrorCode.VALIDATION_ERROR.message
+        },
+        500: {
+            "model": BaseResponse,
+            "description": ErrorCode.INTERNAL_SERVER_ERROR.message
+        }
+    })
 def register_user(user_id: str, profile: UserProfile):
     save_user_profile(user_id, profile.model_dump())
     return response(
@@ -28,7 +40,25 @@ def register_user(user_id: str, profile: UserProfile):
         data = {"user_id": user_id})
 
 
-@app.post("/chat", response_model=BaseResponse)
+@app.post("/chat", response_model=BaseResponse,
+          responses={
+        400: {
+            "model": BaseResponse,
+            "description": ErrorCode.USER_PROFILE_MISSING.message
+        },
+        404: {
+            "model": BaseResponse,
+            "description": ErrorCode.NO_RELEVANT_DOCUMENT.message
+        },
+        422: {
+            "model": BaseResponse,
+            "description": ErrorCode.VALIDATION_ERROR.message
+        },
+        500: {
+            "model": BaseResponse,
+            "description": ErrorCode.INTERNAL_SERVER_ERROR.message
+        }
+    })
 async def chat_with_bot(request: ChatRequest):
     user_id = request.id
     user_question = request.question

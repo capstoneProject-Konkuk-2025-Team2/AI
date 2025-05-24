@@ -1,8 +1,9 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from models.response import error_response
-from app_exception import AppException
-from constants.error_codes import ErrorCode
+from models.response.base_response import error_response
+from utils.app_exception import AppException
+from utils.constants.error_codes import ErrorCode
+from fastapi.exceptions import RequestValidationError
 
 def app_exception_handler(request: Request, exc: AppException):
     status_code, body = error_response(exc.error)
@@ -10,4 +11,8 @@ def app_exception_handler(request: Request, exc: AppException):
 
 def generic_exception_handler(request: Request, exc: Exception):
     status_code, body = error_response(ErrorCode.INTERNAL_SERVER_ERROR)
+    return JSONResponse(status_code=status_code, content=body)
+
+def validation_exception_handler(request: Request, exc: RequestValidationError):
+    status_code, body = error_response(ErrorCode.VALIDATION_ERROR)
     return JSONResponse(status_code=status_code, content=body)
