@@ -1,10 +1,10 @@
 from enum import Enum
 
 class ErrorCode(Enum):
-    VALIDATION_ERROR = (422, "VALIDATION_ERROR", "요청 데이터가 유효하지 않습니다.")
-    INTERNAL_SERVER_ERROR = (500, "INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다.")
-    USER_PROFILE_MISSING = (400, "USER_PROFILE_MISSING", "사용자 정보가 없습니다. 먼저 입력해 주세요.")
-    NO_RELEVANT_DOCUMENT = (404, "NO_RELEVANT_DOCUMENT", "관련 정보를 찾지 못했습니다.")
+    VALIDATION_ERROR = ("VALIDATION_ERROR", "요청 데이터가 유효하지 않습니다.", 422)
+    INTERNAL_SERVER_ERROR = ("INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500)
+    USER_PROFILE_MISSING = ("USER_PROFILE_MISSING", "사용자 정보가 없습니다. 먼저 입력해 주세요.", 400)
+    NO_RELEVANT_DOCUMENT = ("NO_RELEVANT_DOCUMENT", "관련 정보를 찾지 못했습니다.", 404)
 
     def __init__(self, code: str, message: str, http_status: int):
         self._code = code

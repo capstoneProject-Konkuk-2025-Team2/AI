@@ -21,7 +21,7 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 # TODO: 성공 응답 DTO도 정할지 고민
-@app.post("/register/{user_id}", response_model=BaseResponse,
+@app.post("/register", response_model=BaseResponse,
     responses={
         422: {
             "model": BaseResponse,
@@ -32,12 +32,11 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
             "description": ErrorCode.INTERNAL_SERVER_ERROR.message
         }
     })
-def register_user(user_id: str, profile: UserProfile):
-    save_user_profile(user_id, profile.model_dump())
+def register_user(profile: UserProfile):
+    save_user_profile(profile.model_dump())
     return response(
-        success = True,
         message = "사용자 정보가 성공적으로 저장되었습니다.",
-        data = {"user_id": user_id})
+        data = {"user_profile": profile.model_dump()})
 
 
 @app.post("/chat", response_model=BaseResponse,
@@ -87,7 +86,6 @@ async def chat_with_bot(request: ChatRequest):
     answer = model.inference(user_question, add_context=final_context)
 
     return response(
-            success = True,
             message = "사용자 정보를 반영해 성공적으로 응답했습니다.",
             data = {"answer": answer}
         )

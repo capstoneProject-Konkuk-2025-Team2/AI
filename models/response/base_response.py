@@ -3,28 +3,23 @@ from typing import Optional, Any
 from utils.constants.error_codes import ErrorCode
 
 class BaseResponse(BaseModel):
-    success: bool
+    code: int
     message: Optional[str] = None
     data: Optional[Any] = None
-    error_code: Optional[str] = None
 
 def response(
-    success: bool,
     message: Optional[str] = None,
-    data: Any = None,
-    error_code: Optional[str] = None
+    data: Any = None
 ) -> BaseResponse:
     return BaseResponse(
-        success=success,
+        code=200,
         message=message,
-        data=data,
-        error_code=error_code
+        data=data
     )
 
 def error_response(error: ErrorCode) -> tuple[int, dict]:
-    response = response(
-        success=False,
-        message=error.message,
-        error_code=error.code
+    res = BaseResponse(
+        code=error.http_status,
+        message=error.message
     )
-    return error.http_status, response.model_dump()
+    return error.http_status, res.model_dump()

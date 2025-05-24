@@ -7,6 +7,7 @@ class TimeSlot(BaseModel):
     endTime: Optional[str] = None # 종료시간
 
 class UserProfile(BaseModel):
+    id: int
     name: Optional[str] = None # 이름
     major: Optional[str] = None # 학과
     year: Optional[str] = None # 학년
@@ -14,5 +15,5 @@ class UserProfile(BaseModel):
     timetable: Optional[List[TimeSlot]] = None #시간표
 
 class ChatRequest(BaseModel):
-    id: str # 사용자 아이디
+    id: int # 사용자 아이디
     question: str # 검색
