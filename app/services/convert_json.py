@@ -20,7 +20,7 @@ def convert_csv_to_json(csv_path, json_path):
 
     print(f"변환 완료: {os.path.basename(csv_path)} → {os.path.basename(json_path)}")
 
-def convert_all(folder="my_csv_folder"):
+def convert_all(folder="app/data/my_csv_folder"):
     for file_name in os.listdir(folder):
         if file_name.endswith(".csv") and file_name.startswith("se_"):
             csv_path = os.path.join(folder, file_name)
@@ -29,4 +29,4 @@ def convert_all(folder="my_csv_folder"):
             convert_csv_to_json(csv_path, json_path)
 
 if __name__ == "__main__":
-    convert_all("my_csv_folder")
+    convert_all("app/data/my_csv_folder")

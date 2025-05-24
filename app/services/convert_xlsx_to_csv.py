@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 
-def convert_all_xlsx_to_csv(source_folder="my_excel_folder", dest_folder="my_csv_folder"):
+def convert_all_xlsx_to_csv(source_folder="app/data/my_excel_folder", dest_folder="app/data/my_csv_folder"):
     os.makedirs(dest_folder, exist_ok=True)
 
     for file in os.listdir(source_folder):

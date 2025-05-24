@@ -6,10 +6,10 @@ from llmware.models import ModelCatalog
 from llmware.setup import Setup
 from llmware.configs import LLMWareConfig, MilvusConfig
 from llmware.prompts import Prompt
-from app.segmantic_rag import semantic_rag
+from app.services.segmantic_rag import semantic_rag
 import os
 
-def prepare_library(library_name="my_library", document_folder="app/my_csv_folder"):
+def prepare_library(library_name="my_library", document_folder="app/data/my_csv_folder"):
     """ 라이브러리 생성 + 폴더 안 csv 파일 파싱하는 함수 """
     # DB 설정
     LLMWareConfig().set_active_db("sqlite")
@@ -100,7 +100,7 @@ def start_chatbot(library_name, model_name="bling-large"):
 # ========== 4. 전체 실행 ==========
 if __name__ == "__main__":
     library_name = "my_library"  # 원하는 이름
-    document_folder =  "my_csv_folder"  # 폴더 이름으로 수정
+    document_folder =  "app/data/my_csv_folder"  # 폴더 이름으로 수정
     embedding_model = "mini-lm-sbert"  # 사용할 임베딩 모델
     llm_model_name = "bling-answer-tool"  # 사용할 LLM 모델
 

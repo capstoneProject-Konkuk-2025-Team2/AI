@@ -5,7 +5,7 @@ from datetime import datetime
 from llmware.models import ModelCatalog
 
 
-def load_user_profile(name, path="users.json"):
+def load_user_profile(name, path="app/data/users.json"):
     """이름(name)에 해당하는 사용자 정보를 JSON 파일에서 불러옵니다."""
     with open(path, "r", encoding="utf-8") as f:
         users = json.load(f)
@@ -60,7 +60,7 @@ def is_time_conflict(schedule1, schedule2):
     # 시간이 겹치는 경우: A 시작 < B 끝 and B 시작 < A 끝
     return start1 < end2 and start2 < end1
 
-def load_filtered_programs_from_folder(user_profile, folder_path="my_csv_folder"):
+def load_filtered_programs_from_folder(user_profile, folder_path="app/data/my_csv_folder"):
     """폴더 내 모든 JSON 비교과 파일을 읽고, 사용자 시간표와 겹치지 않는 프로그램만 필터링"""
     all_programs = []
 
@@ -166,7 +166,7 @@ while True:
         break
 
     # Step 1: 시간 겹침 필터링
-    step1_programs = load_filtered_programs_from_folder(user, folder_path="my_csv_folder")
+    step1_programs = load_filtered_programs_from_folder(user, folder_path="app/data/my_csv_folder")
 
     # Step 2: 관심사 기반 필터링
     step2_programs = filter_by_interest(step1_programs, user["관심사"])
