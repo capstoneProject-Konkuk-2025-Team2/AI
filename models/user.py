@@ -14,5 +14,5 @@ class UserProfile(BaseModel):
     timetable: Optional[List[TimeSlot]] = None #시간표
 
 class ChatRequest(BaseModel):
-    id: str
-    question: str
+    id: str # 사용자 아이디
+    question: str # 검색
