@@ -1,34 +1,19 @@
 {
   "1": {
     "id": 1,
-    "name": "조은영",
-    "major": "공과대",
-    "year": "4학년",
-    "interestes": ["AI", "데이터", "파이썬"],
-    "timetable": [
-      { "day": "수", "startTime": "13:00", "endTime": "15:00" },
-      { "day": "목", "startTime": "10:00", "endTime": "12:00" }
-    ]
-  },
-  "2": {
-    "id": 2,
-    "name": "홍길동",
-    "major": "사회과학대",
-    "year": "2학년",
-    "interestes": ["정치", "토론"],
-    "timetable": [
-      { "day": "화", "startTime": "09:00", "endTime": "12:00" }
-    ]
-  },
-  "3": {
-    "id": 3,
-    "name": "김지민",
-    "major": "예술대",
+    "name": "김철수",
+    "major": "컴퓨터공학과",
     "year": "3학년",
-    "interestes": ["영상편집", "디자인"],
+    "interestes": [
+      "AI",
+      "웹개발"
+    ],
     "timetable": [
-      { "day": "월", "startTime": "10:00", "endTime": "13:00" },
-      { "day": "수", "startTime": "14:00", "endTime": "16:00" }
+      {
+        "day": "월",
+        "startTime": "10:00",
+        "endTime": "11:30"
+      }
     ]
   }
 }

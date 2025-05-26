@@ -3,6 +3,13 @@ from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
 from app.services.context_builder import build_user_context
 from app.config.llm_config import model, query_engine
+from app.services.mvp_chatbot import (
+    load_user_profile,
+    load_filtered_programs_from_folder,
+    filter_by_interest,
+    generate_llm_prompt
+)
+from llmware.models import ModelCatalog
 from app.models.response.base_response import response, BaseResponse
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
@@ -12,9 +19,11 @@ from app.utils.exception_handler import (
     generic_exception_handler,
     validation_exception_handler
 )
+import json
+
 app = FastAPI()
 
-# 에외 핸들러 등록
+# 예외 핸들러 등록
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -32,11 +41,11 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
             "description": ErrorCode.INTERNAL_SERVER_ERROR.message
         }
     })
-def register_user(profile: UserProfile):
+async def register_user(profile: UserProfile):
     save_user_profile(profile.model_dump())
     return response(
-        message = "사용자 정보가 성공적으로 저장되었습니다.",
-        data = {"user_profile": profile.model_dump()})
+        message="사용자 정보가 성공적으로 저장되었습니다.",
+        data={"user_profile": profile.model_dump()})
 
 
 @app.post("/chat", response_model=BaseResponse,
@@ -67,25 +76,26 @@ async def chat_with_bot(request: ChatRequest):
     if not user_profile:
         raise AppException(ErrorCode.USER_PROFILE_MISSING)
 
-    # 사용자 context 생성
-    user_context = build_user_context(user_profile)
-    
-    # semantic query
-    search_results = query_engine.semantic_query(user_question, result_count=3)
+    # 시간 겹침 필터링
+    step1_programs = load_filtered_programs_from_folder(user_profile)
 
-    if not search_results:
+    # 관심사 기반 필터링
+    step2_programs = filter_by_interest(step1_programs, user_profile["interests"])
+
+    if not step2_programs:
         raise AppException(ErrorCode.NO_RELEVANT_DOCUMENT)
 
-    # context 결합
-    combined_context = " ".join([res["text"] for res in search_results])
+    # 프롬프트 생성 및 LLM 호출
+    final_prompt = generate_llm_prompt(user_profile, user_question, step2_programs)
+    model = ModelCatalog().load_model("bling-answer-tool")
+    response_data = model.inference(final_prompt)
 
-    # 최종 context 조합
-    final_context = user_context + "\n" + combined_context
-
-    # 모델 추론
-    answer = model.inference(user_question, add_context=final_context)
 
     return response(
-            message = "사용자 정보를 반영해 성공적으로 응답했습니다.",
-            data = {"answer": answer}
-        )
+        message="사용자 정보를 반영해 성공적으로 응답했습니다.",
+        data={
+            "answer": response_data["llm_response"],
+            "total_programs": len(step2_programs),
+            "recommended_programs": step2_programs[:3]
+        }
+    )
