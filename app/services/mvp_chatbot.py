@@ -5,16 +5,14 @@ from datetime import datetime
 from llmware.models import ModelCatalog
 
 
-def load_user_profile(name, path="users.json"):
-    """이름(name)에 해당하는 사용자 정보를 JSON 파일에서 불러옵니다."""
+def load_user_profile(user_id, path="app/data/users.json"):
+    """사용자 ID에 해당하는 사용자 정보를 JSON 파일에서 불러옵니다."""
     with open(path, "r", encoding="utf-8") as f:
         users = json.load(f)
     
-    for user in users:
-        if user["이름"] == name:
-            return user
-    
-    return None  # 해당 이름을 찾지 못한 경우
+    # ID를 문자열로 변환하여 검색
+    user_id = str(user_id)
+    return users.get(user_id)
 
 def get_weekday_korean(date_str):
     """2025.05.29 → '목'"""
@@ -60,7 +58,7 @@ def is_time_conflict(schedule1, schedule2):
     # 시간이 겹치는 경우: A 시작 < B 끝 and B 시작 < A 끝
     return start1 < end2 and start2 < end1
 
-def load_filtered_programs_from_folder(user_profile, folder_path="my_csv_folder"):
+def load_filtered_programs_from_folder(user_profile, folder_path="app/data/my_csv_folder"):
     """폴더 내 모든 JSON 비교과 파일을 읽고, 사용자 시간표와 겹치지 않는 프로그램만 필터링"""
     all_programs = []
 
@@ -79,7 +77,9 @@ def load_filtered_programs_from_folder(user_profile, folder_path="my_csv_folder"
                     continue
 
                 conflict = False
-                for user_time in user_profile["시간표"]:
+                # 시간표 형식 변경에 따른 수정
+                for time_slot in user_profile["timetable"]:
+                    user_time = f"{time_slot['day']} {time_slot['startTime']}~{time_slot['endTime']}"
                     if is_time_conflict(user_time, program_schedule):
                         conflict = True
                         break
@@ -100,25 +100,13 @@ def filter_by_interest(programs, interests):
             filtered.append(item)
     return filtered
 
-# 테스트
-
-# user = load_user_profile("조은영")
-# step1_programs = load_filtered_programs_from_folder(user, folder_path="my_csv_folder")
-# step2_programs = filter_by_interest(step1_programs, user["관심사"])
-
-# print(f"최종 추천 수: {len(step2_programs)}")
-# for prog in step2_programs[:3]:
-#     print(prog["text"][:200], "\n---\n")
-
-# ===================== 사용자 로그인 및 챗봇 루프 =====================
-
 def generate_llm_prompt(user, question, programs):
     """
     사용자 정보, 질문, 필터링된 프로그램들을 바탕으로 LLM에게 전달할 프롬프트를 생성.
     """
     # 1. 사용자 정보 요약
-    profile_summary = f"{user['이름']}님은 {user['학년']} {user['학과']} 소속이며, 관심사는 {', '.join(user['관심사'])}입니다."
-    timetable_summary = "시간표는 다음과 같습니다:\n" + "\n".join(user["시간표"])
+    profile_summary = f"{user['name']}님은 {user['year']} {user['major']} 소속이며, 관심사는 {', '.join(user['interests'])}입니다."
+    timetable_summary = "시간표는 다음과 같습니다:\n" + "\n".join([f"{t['day']} {t['startTime']}~{t['endTime']}" for t in user["timetable"]])
 
     # 2. 프로그램 리스트 요약 (최대 5개)
     program_summaries = []
@@ -149,44 +137,44 @@ def generate_llm_prompt(user, question, programs):
 """
     return prompt.strip()
 
-# 사용자 로그인
-name = input("당신의 이름을 입력하세요: ")
-user = load_user_profile(name)
+# # 사용자 로그인
+# name = input("당신의 이름을 입력하세요: ")
+# user = load_user_profile(name)
 
-if not user:
-    print(f"{name}이라는 이름을 가진 사용자를 찾을 수 없습니다.")
-    exit()
+# if not user:
+#     print(f"{name}이라는 이름을 가진 사용자를 찾을 수 없습니다.")
+#     exit()
 
-print(f"{name}님, 챗봇을 시작합니다. 종료하려면 'exit'을 입력하세요.\n")
+# print(f"{name}님, 챗봇을 시작합니다. 종료하려면 'exit'을 입력하세요.\n")
 
-while True:
-    question = input("질문: ")
-    if question.lower() in ["exit", "quit", "종료"]:
-        print("챗봇을 종료합니다.")
-        break
+# while True:
+#     question = input("질문: ")
+#     if question.lower() in ["exit", "quit", "종료"]:
+#         print("챗봇을 종료합니다.")
+#         break
 
-    # Step 1: 시간 겹침 필터링
-    step1_programs = load_filtered_programs_from_folder(user, folder_path="my_csv_folder")
+#     # Step 1: 시간 겹침 필터링
+#     step1_programs = load_filtered_programs_from_folder(user, folder_path="app/data/my_csv_folder")
 
-    # Step 2: 관심사 기반 필터링
-    step2_programs = filter_by_interest(step1_programs, user["관심사"])
+#     # Step 2: 관심사 기반 필터링
+#     step2_programs = filter_by_interest(step1_programs, user["interests"])
 
-    if not step2_programs:
-        print("추천할 비교과 프로그램이 없습니다.\n")
-        continue
+#     if not step2_programs:
+#         print("추천할 비교과 프로그램이 없습니다.\n")
+#         continue
 
-    # 여기서 프롬프트 생성 + LLM 호출
-    final_prompt = generate_llm_prompt(user, question, step2_programs)
-    model = ModelCatalog().load_model("bling-answer-tool")
-    response = model.inference(final_prompt)
+#     # 여기서 프롬프트 생성 + LLM 호출
+#     final_prompt = generate_llm_prompt(user, question, step2_programs)
+#     model = ModelCatalog().load_model("bling-answer-tool")
+#     response = model.inference(final_prompt)
 
-    # 결과 출력
-    print("\n LLM 추천 결과:\n", response["llm_response"], "\n")
+#     # 결과 출력
+#     print("\n LLM 추천 결과:\n", response["llm_response"], "\n")
 
-    # 출력
-    print(f"\n총 추천된 프로그램 수: {len(step2_programs)}")
-    for idx, prog in enumerate(step2_programs[:3], start=1):
-        print(f"\n 추천 {idx}:\n{prog['text'][:300]}\n---")
+#     # 출력
+#     print(f"\n총 추천된 프로그램 수: {len(step2_programs)}")
+#     for idx, prog in enumerate(step2_programs[:3], start=1):
+#         print(f"\n 추천 {idx}:\n{prog['text'][:300]}\n---")
 
-    print()
+#     print()
 
