@@ -94,6 +94,8 @@ async def chat_with_bot(request: ChatRequest):
     return response(
         message="사용자 정보를 반영해 성공적으로 응답했습니다.",
         data={
+            "user_summary": f"{user_profile['name']}님의 관심사는 {', '.join(user_profile['interests'])}입니다. 시간표는 다음과 같습니다:\n" + "\n".join([f"{t['day']} {t['startTime']}~{t['endTime']}" for t in user_profile["timetable"]]),
+            "recommendation_intro": f"위 정보를 바탕으로 시간표와 겹치지 않고 {', '.join(user_profile['interests'])}과 관련된 활동을 추천해드립니다.",
             "answer": response_data["llm_response"],
             "total_programs": len(step2_programs),
             "recommended_programs": step2_programs[:3]
