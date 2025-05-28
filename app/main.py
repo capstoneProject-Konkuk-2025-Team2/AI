@@ -1,15 +1,13 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.services.context_builder import build_user_context
-from app.config.llm_config import model, query_engine
+from app.config.llm_config import model
 from app.services.mvp_chatbot import (
     load_user_profile,
     load_filtered_programs_from_folder,
     filter_by_interest,
     generate_llm_prompt
 )
-from llmware.models import ModelCatalog
 from app.models.response.base_response import response, BaseResponse
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
@@ -87,7 +85,6 @@ async def chat_with_bot(request: ChatRequest):
 
     # 프롬프트 생성 및 LLM 호출
     final_prompt = generate_llm_prompt(user_profile, user_question, step2_programs)
-    model = ModelCatalog().load_model("bling-answer-tool")
     response_data = model.inference(final_prompt)
 
 

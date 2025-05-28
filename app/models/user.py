@@ -10,8 +10,8 @@ class UserProfile(BaseModel):
     id: int
     name: Optional[str] = None # 이름
     major: Optional[str] = None # 학과
-    year: Optional[str] = None # 학년
-    interestes: Optional[List[str]] = None # 관심사
+    grade: Optional[str] = None # 학년
+    interests: Optional[List[str]] = None # 관심사
     timetable: Optional[List[TimeSlot]] = None #시간표
 
 class ChatRequest(BaseModel):
