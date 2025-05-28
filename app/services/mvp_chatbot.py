@@ -105,7 +105,7 @@ def generate_llm_prompt(user, question, programs):
     사용자 정보, 질문, 필터링된 프로그램들을 바탕으로 LLM에게 전달할 프롬프트를 생성.
     """
     # 1. 사용자 정보 요약
-    profile_summary = f"{user['name']}님은 {user['year']} {user['major']} 소속이며, 관심사는 {', '.join(user['interests'])}입니다."
+    profile_summary = f"{user['name']}님은 {user['grade']} {user['major']} 소속이며, 관심사는 {', '.join(user['interests'])}입니다."
     timetable_summary = "시간표는 다음과 같습니다:\n" + "\n".join([f"{t['day']} {t['startTime']}~{t['endTime']}" for t in user["timetable"]])
 
     # 2. 프로그램 리스트 요약 (최대 5개)

@@ -1,7 +1,7 @@
 import os
 import json
 
-USER_TABLE_PATH = "app/data/user.json"
+USER_TABLE_PATH = "app/data/users.json"
 
 def save_user_profile(profile_data: dict):
     user_id = str(profile_data["id"])
