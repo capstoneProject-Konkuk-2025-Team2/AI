@@ -5,7 +5,8 @@ class ErrorCode(Enum):
     INTERNAL_SERVER_ERROR = ("INTERNAL_SERVER_ERROR", "서버 내부 오류가 발생했습니다.", 500)
     USER_PROFILE_MISSING = ("USER_PROFILE_MISSING", "사용자 정보가 없습니다. 먼저 입력해 주세요.", 400)
     NO_RELEVANT_DOCUMENT = ("NO_RELEVANT_DOCUMENT", "관련 정보를 찾지 못했습니다.", 404)
-
+    NOT_FOUND_OPENAI_API_KEY = ("NOT_FOUND_OPENAI_API_KEY", "OPEN_API_KEY를 찾을 수 없습니다. .env 파일을 확인해주세요.", 400)
+    
     def __init__(self, code: str, message: str, http_status: int):
         self._code = code
         self._message = message
