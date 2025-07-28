@@ -54,22 +54,5 @@
         "endTime": "14:30"
       }
     ]
-  },
-  "3": {
-    "id": 3,
-    "name": "김철삼",
-    "major": "컴퓨터공학과",
-    "grade": "3학년",
-    "interests": [
-      "AI",
-      "웹개발"
-    ],
-    "timetable": [
-      {
-        "day": "월",
-        "startTime": "10:00",
-        "endTime": "11:30"
-      }
-    ]
   }
 }
