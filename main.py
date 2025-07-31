@@ -30,6 +30,8 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 @app.post("/register", response_model=BaseResponse,
+    summary="사용자 등록",
+    description="사용자 정보를 등록하고 프로필을 저장합니다.",
     responses={
         422: {
             "model": BaseResponse,
@@ -51,7 +53,9 @@ async def register_user(profile: UserProfile):
 
 
 @app.post("/chat", response_model=BaseResponse,
-          responses={
+    summary="챗봇과 대화 요청",
+    description="사용자 프로필을 기반으로 챗봇과 자연어로 대화를 수행합니다.",
+    responses={
         400: {
             "model": BaseResponse,
             "description": ErrorCode.USER_PROFILE_MISSING.message
