@@ -17,11 +17,8 @@ from app.utils.exception_handler import (
     generic_exception_handler,
     validation_exception_handler
 )
-from app.models.activity import Activity
-from app.services.activity_service import ActivityService
 
 app = FastAPI()
-activity_service = ActivityService()
 
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
@@ -93,16 +90,3 @@ async def chat_with_bot(request: ChatRequest):
             "answer": result
         }
     )
-
-# 사용자가 활동 데이터를 activities.json에 저장한다 - 형식 상의하기
-@app.post("/activities", response_model=BaseResponse)
-async def add_activity(activity: Activity):
-    try:
-        activity_id = activity_service.save_activity(activity)
-        return response(
-            message=Message.USER_ADD_ACTIVITY_SUCCESS,
-            data={"activity_id": activity_id}
-        )
-    except Exception as e:
-        raise AppException(ErrorCode.INTERNAL_SERVER_ERROR)
-
