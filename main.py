@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.chatbot.Agent_Rag_Chatbot import (
+from app.chatbot.agent_rag_chatbot import (
     make_agent,
     initialize_activities,
     resolve_followup_question,

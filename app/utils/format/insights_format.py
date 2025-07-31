@@ -1,4 +1,3 @@
-# 인사이트 및 추천사항 생성 설정
 from app.utils.format.feedback_format import CATEGORY_NAMES
 
 # 인사이트 생성 설정

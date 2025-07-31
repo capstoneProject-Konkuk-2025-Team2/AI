@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from datetime import datetime
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
@@ -7,11 +8,14 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from app.config.llm_config import client, llm
 from app.services.user_service import load_user_profile
+from pathlib import Path
+from dotenv import load_dotenv
 
-USER_PATH = "app/data/users.json"
+load_dotenv()
+
+USER_PATH = Path(os.getenv("DATA_DIR"))
 ACTIVITY_JSON_PATHS = [
-    "app/data/my_csv_folder/se_wein_일반비교과_정보(신청가능).json",
-    "app/data/my_csv_folder/se_wein_취창업비교과_정보(신청가능).json"
+    Path(p.strip()) for p in os.getenv("ACTIVITY_JSON_PATHS", "").split(",") if p.strip()
 ]
 
 recent_top5_idx_title_map = {}
