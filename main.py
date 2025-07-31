@@ -17,6 +17,8 @@ from app.utils.exception_handler import (
     generic_exception_handler,
     validation_exception_handler
 )
+from app.models.activity import Activity
+from app.services import activity_service
 
 app = FastAPI()
 
@@ -32,6 +34,7 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 @app.post("/register", response_model=BaseResponse,
     summary="사용자 등록",
     description="사용자 정보를 등록하고 프로필을 저장합니다.",
+    tags=["사용자 정보"],
     responses={
         422: {
             "model": BaseResponse,
@@ -55,6 +58,7 @@ async def register_user(profile: UserProfile):
 @app.post("/chat", response_model=BaseResponse,
     summary="챗봇과 대화 요청",
     description="사용자 프로필을 기반으로 챗봇과 자연어로 대화를 수행합니다.",
+    tags=["챗봇 통신"],
     responses={
         400: {
             "model": BaseResponse,
@@ -93,4 +97,31 @@ async def chat_with_bot(request: ChatRequest):
         data={
             "answer": result
         }
+    )
+
+# 필요없는것 같은데
+@app.post("/activities", response_model=BaseResponse,
+    summary="사용자 활동 정보 저장",
+    description=
+        """
+        사용자의 활동(Activity) 정보를 서버에 저장합니다.  
+        활동에는 제목, 설명, 카테고리, 시작/종료 시간, 키워드, 위치 등의 정보가 포함됩니다.  
+        저장이 완료되면 고유한 활동 ID를 반환합니다.
+        """,
+    tags=["사용자 정보"],
+    responses={
+        400: {
+            "model": BaseResponse,
+            "description": ErrorCode.INVALID_ACTIVITY_DATA.message
+        },
+        500: {
+            "model": BaseResponse,
+            "description": ErrorCode.ACTIVITY_SAVE_FAILED.message
+        }
+    })
+async def add_activity(activity: Activity):
+    activity_id = activity_service.save_activity(activity)
+    return response(
+        message=Message.ACTIVITY_SAVE_SUCCESS,
+        data={"activity_id": activity_id}
     )
