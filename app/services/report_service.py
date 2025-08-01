@@ -4,10 +4,12 @@ from app.services.activity_service import calculate_user_stats
 from app.services.generator.insight_generator import (
     generate_insights, generate_recommendations
 )
+from app.chatbot.llm_feedback_chatbot import generate_feedback
 from app.models.activity import UserReport, ReportPeriod
 from app.services.user_service import load_all_users
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
+from app.services.notification_service import send_user_report_notification # 구현하기
 
 @celery_app.task
 def test_hello(): # celery 테스트 - 완료함
@@ -76,12 +78,18 @@ def generate_weekly_report(self):
                 report = generate_user_report(user_id, ReportPeriod.WEEKLY)
                 success_count += 1
                 print(f"주간 리포트 생성 완료: {user_id}")
-                
+                success = send_user_report_notification(report, user)
+                if not success:
+                    failed_users.append(user_id)
+
+                success_count += 1
+
             except Exception as e:
                 failed_users.append(user_id)
                 print(f"오류 발생: {user_id} - {e}")
         
         result_message = f"주간 리포트 생성 완료: 성공 {success_count}명"
+        
         if failed_users:
             result_message += f", 실패 {len(failed_users)}명 ({', '.join(failed_users)})"
         
@@ -106,6 +114,11 @@ def generate_monthly_report(self):
                 report = generate_user_report(user_id, ReportPeriod.MONTHLY)
                 success_count += 1
                 print(f"월간 리포트 생성 완료: {user_id}")
+                success = send_user_report_notification(report, user)
+                if not success:
+                    failed_users.append(user_id)
+
+                success_count += 1
                 
             except Exception as e:
                 failed_users.append(user_id)
@@ -128,6 +141,7 @@ def generate_single_user_report(self, user_id: str, period: str):
         
         result_message = f"사용자 {user_id}의 {period} 리포트 생성 완료"
         print(f"{result_message}")
+        # 사용자 아이디로 사용자 조회 - 근데 일단 보류 (화면을 추가할지 논의를 안해봤기 때문)
         
         return {
             "status": "success",

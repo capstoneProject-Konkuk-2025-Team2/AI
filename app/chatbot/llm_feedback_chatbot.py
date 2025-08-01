@@ -16,7 +16,7 @@ def generate_feedback(stats: ActivityStats, insights: List[str], recommendations
         prompt = _build_feedback_prompt(stats, insights, recommendations)
 
         response = client.chat.completions.create(
-            model=LLM_CONFIG["model"], # LLM_CONFIG가 feedback_format에 있는게 맞을까? (agent_rag_chatbot과 동일한 모델이면 config로 빼면 좋을 듯)
+            model=LLM_CONFIG["model"], # LLM_CONFIG가 feedback_format에 있는게 맞을까? 일단 빼놓음 (agent_rag_chatbot과 동일한 모델이면 config로 빼면 좋을 듯)
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
