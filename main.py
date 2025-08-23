@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
+from app.chatbot.agent_rag_chatbot import run_query
 from app.chatbot.agent_rag_chatbot import (
     make_agent,
     initialize_activities,
@@ -88,9 +89,10 @@ async def chat_with_bot(request: ChatRequest):
     if not activities:
         initialize_activities()
 
-    agent = make_agent(user_profile)
-    query = resolve_followup_question(user_question);
-    result = agent.run(query)
+    # agent = make_agent(user_profile)
+    # query = resolve_followup_question(user_question);
+    # result = agent.run(query)
+    result = run_query(user_profile, user_question)
 
     return response(
         message=Message.CHAT_RESPONSE_SUCCESS,
@@ -125,3 +127,11 @@ async def add_activity(activity: Activity):
         message=Message.ACTIVITY_SAVE_SUCCESS,
         data={"activity_id": activity_id}
     )
+
+#     # --- Warmup on startup ---
+# from app.chatbot.agent_rag_chatbot import initialize_activities, activities
+
+# @app.on_event("startup")
+# def warmup():
+#     if not activities:
+#        initialize_activities()

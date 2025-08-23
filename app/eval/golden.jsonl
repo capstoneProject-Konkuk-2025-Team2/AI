@@ -1,0 +1,53 @@
+{"type":"retrieval","user_id":"1","query":"AI 관련 비교과 추천해줘","k":5,"expected_titles_regex":["내:?일\\s*탐색\\s*워크숍.*AI\\s*시대\\s*준비\\s*전략.*데이터\\s*사이언스"]}
+{"type":"retrieval","user_id":"1","query":"창업 프로그램 추천해줘","k":5,"expected_titles_regex":["K-?FOOD\\s*인턴쉽","창업\\s*K-?FOOD"]}
+{"type":"retrieval","user_id":"1","query":"KUM 마일리지 20점 비교과 추천해줘","k":5,"expected_mileage":20}
+{"type":"retrieval","user_id":"1","query":"수요일 가능한 비교과 추천","k":5,"expected_titles_regex":["릴레이\\s*직무\\s*컨설팅"]}
+{"type":"retrieval","user_id":"1","query":"데이터 사이언스 관련 추천","k":5,"expected_titles_regex":["데이터\\s*사이언스","SW/IT\\s*데이터"]}
+
+{"type":"retrieval","user_id":"1","query":"ai 관련 비교과 추천해줘","k":5,"expected_titles_regex":["AI\\s*시대\\s*준비","ChatGPT","데이터\\s*사이언스"]}
+{"type":"retrieval","user_id":"1","query":"아이 관련 비교과 추천해줘","k":5,"expected_titles_regex":["AI\\s*시대\\s*준비"]}
+{"type":"retrieval","user_id":"1","query":"머신러닝 비교과 뭐 있어?","k":5,"expected_titles_regex":["AI","데이터\\s*사이언스"]}
+{"type":"retrieval","user_id":"1","query":"창업 관련 인턴십 추천","k":5,"expected_titles_regex":["K-?FOOD\\s*인턴쉽"]}
+{"type":"retrieval","user_id":"1","query":"수료증 주는 활동 추천","k":5,"expected_titles_regex":["수료증"]}
+
+{"type":"retrieval","user_id":"1","query":"KUM 10점 활동 추천","k":5,"expected_mileage":10}
+{"type":"retrieval","user_id":"1","query":"마일리지 스무 점 활동 추천","k":5,"expected_mileage":20}
+{"type":"retrieval","user_id":"1","query":"데이터 분석 세미나 추천","k":5,"expected_titles_regex":["데이터","SW/IT\\s*데이터"]}
+{"type":"retrieval","user_id":"1","query":"커리어로드맵 특강 추천","k":5,"expected_titles_regex":["커리어로드맵\\s*작성법"]}
+{"type":"retrieval","user_id":"1","query":"캡스톤 디자인 비교과 추천","k":5,"expected_titles_regex":["캡스톤디자인"]}
+
+{"type":"retrieval","user_id":"1","query":"수요일 12시~5시 가능한 프로그램","k":5,"expected_titles_regex":["내:?일\\s*탐색\\s*워크숍|릴레이\\s*직무\\s*컨설팅"]}
+{"type":"retrieval","user_id":"1","query":"목요일 오후 활동 추천","k":5,"expected_titles_regex":["내:?일\\s*탐색\\s*워크숍","5/29","목\\)"]}
+{"type":"retrieval","user_id":"1","query":"AI 시대 준비 전략 워크숍 추천","k":5,"expected_titles_regex":["AI\\s*시대\\s*준비\\s*전략"]}
+{"type":"retrieval","user_id":"1","query":"제약 바이오 R&D 컨설팅 추천","k":5,"expected_titles_regex":["제약\\s*바이오\\s*R&D"]}
+{"type":"retrieval","user_id":"1","query":"임상/허가 컨설팅 비교과","k":5,"expected_titles_regex":["임상/허가"]}
+
+{"type":"retrieval","user_id":"1","query":"경영지원 재경 컨설팅 추천","k":5,"expected_titles_regex":["경영지원.*재경"]}
+{"type":"retrieval","user_id":"1","query":"전략 마케팅 컨설팅 추천","k":5,"expected_titles_regex":["전략\\s*마케팅"]}
+{"type":"retrieval","user_id":"1","query":"SW/IT 데이터 컨설팅 추천","k":5,"expected_titles_regex":["SW/IT\\s*데이터"]}
+{"type":"retrieval","user_id":"1","query":"배양/정제 공정 컨설팅 추천","k":5,"expected_titles_regex":["배양/정제\\s*공정"]}
+{"type":"retrieval","user_id":"1","query":"차량기획 PM 컨설팅 추천","k":5,"expected_titles_regex":["차량기획/PM"]}
+
+{"type":"retrieval","user_id":"1","query":"진로설계특강 추천","k":5,"expected_titles_regex":["진로설계특강","진로\\s*설계"]}
+{"type":"retrieval","user_id":"1","query":"자기소개서 컨설팅 추천","k":5,"expected_titles_regex":["자기소개서\\s*컨설팅"]}
+{"type":"retrieval","user_id":"1","query":"푸드테크 기술사업화 교육 추천","k":5,"expected_titles_regex":["푸드테크","K-?FOOD"]}
+{"type":"retrieval","user_id":"1","query":"학기중 계획 세우기 특강 추천","k":5,"expected_titles_regex":["학기중\\s*계획\\s*세우기"]}
+{"type":"retrieval","user_id":"1","query":"ChatGPT 워크숍 추천","k":5,"expected_titles_regex":["ChatGPT"]}
+
+{"type":"field","user_id":"1","context_query":"AI 관련 비교과 추천해줘","query_after":"1번 활동 KUM 마일리지 얼마줘?","field":"KUM마일리지","expected_value_regex":"^KUM마일리지:\\s*(10|20)$"}
+{"type":"field","user_id":"1","context_query":"AI 관련 비교과 추천해줘","query_after":"그건 신청기간은?","field":"신청기간","expected_value_regex":"^신청기간:\\s*[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}~[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}$"}
+{"type":"field","user_id":"1","context_query":"AI 관련 비교과 추천해줘","query_after":"그건 대상자는?","field":"대상자","expected_value_regex":"^대상자:\\s*.+$"}
+{"type":"field","user_id":"1","context_query":"AI 관련 비교과 추천해줘","query_after":"그건 진행기간은?","field":"진행기간","expected_value_regex":"^진행기간:\\s*[0-9]{4}\\.[0-9]{2}\\.[0-9]{2} [0-9]{2}:[0-9]{2}~[0-9]{4}\\.[0-9]{2}\\.[0-9]{2} [0-9]{2}:[0-9]{2}$"}
+{"type":"field","user_id":"1","context_query":"AI 관련 비교과 추천해줘","query_after":"그건 URL?","field":"URL","expected_value_regex":"^URL:\\s*https?://\\S+$"}
+
+{"type":"field","user_id":"1","context_query":"창업 프로그램 추천해줘","query_after":"1번 활동 신청기간 알려줘","field":"신청기간","expected_value_regex":"^신청기간:\\s*.+$"}
+{"type":"field","user_id":"1","context_query":"창업 프로그램 추천해줘","query_after":"그건 장소는?","field":"장소","expected_value_regex":"^장소:\\s*.+$"}
+{"type":"field","user_id":"1","context_query":"창업 프로그램 추천해줘","query_after":"그건 수료증 줘?","field":"수료증","expected_value_regex":"^수료증:\\s*(있음|없음|자료에 없음)$"}
+{"type":"field","user_id":"1","context_query":"KUM 마일리지 20점 비교과 추천해줘","query_after":"1번 활동 KUM 마일리지 몇 점이야?","field":"KUM마일리지","expected_value_regex":"^KUM마일리지:\\s*20$"}
+{"type":"field","user_id":"1","context_query":"KUM 마일리지 20점 비교과 추천해줘","query_after":"그건 대상자 누구야?","field":"대상자","expected_value_regex":"^대상자:\\s*.+$"}
+
+{"type":"field","user_id":"1","context_query":"SW/IT 데이터 컨설팅 추천","query_after":"1번 활동 URL 알려줘","field":"URL","expected_value_regex":"^URL:\\s*https?://\\S+$"}
+{"type":"field","user_id":"1","context_query":"전략 마케팅 컨설팅 추천","query_after":"그건 진행기간은?","field":"진행기간","expected_value_regex":"^진행기간:\\s*.+$"}
+{"type":"field","user_id":"1","context_query":"임상/허가 컨설팅 비교과","query_after":"그건 마일리지?","field":"KUM마일리지","expected_value_regex":"^KUM마일리지:\\s*(10|20)$"}
+{"type":"field","user_id":"1","context_query":"제약 바이오 R&D 컨설팅 추천","query_after":"그건 대상자 누구야?","field":"대상자","expected_value_regex":"^대상자:\\s*.+$"}
+{"type":"field","user_id":"1","context_query":"커리어로드맵 특강 추천","query_after":"그건 URL?","field":"URL","expected_value_regex":"^URL:\\s*https?://\\S+$"}

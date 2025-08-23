@@ -11,5 +11,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise AppException(ErrorCode.NOT_FOUND_OPENAI_API_KEY)
 
+MODEL_NAME = os.getenv("LLM_MODEL", "gpt-3.5-turbo") # 모델 명시
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
