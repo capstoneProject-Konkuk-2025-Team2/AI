@@ -1,7 +1,7 @@
 import os
 import json
 
-USER_TABLE_PATH = "app/data/users.json"
+USER_TABLE_PATH = "app/data/users.json" # db에서 가져다 쓰는 방식이 좋을거 같지만 ? ai가 사용하니까 남겨둠
 
 def save_user_profile(profile_data: dict):
     user_id = str(profile_data["id"])

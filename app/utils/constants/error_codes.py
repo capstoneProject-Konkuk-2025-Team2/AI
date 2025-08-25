@@ -14,7 +14,7 @@ class ErrorCode(Enum):
 
     FILE_READ_ERROR = ("FILE_READ_ERROR", "파일 읽기에 실패했습니다.", 500)
     DATA_ACCESS_ERROR = ("DATA_ACCESS_ERROR", "데이터 접근 중 오류가 발생했습니다.", 500)
-
+    REPORT_GENERATION_FAILED = ("REPORT_GENERATION_FAILED", "리포트 생성 중 오류가 발생했습니다.", 500)
     def __init__(self, code: str, message: str, http_status: int):
         self._code = code
         self._message = message

@@ -18,7 +18,11 @@ from app.utils.exception_handler import (
     validation_exception_handler
 )
 from app.models.activity import Activity
-from app.services import activity_service
+from app.services import activity_service, report_service
+from datetime import datetime
+from typing import List, Dict, Optional
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
@@ -96,32 +100,50 @@ async def chat_with_bot(request: ChatRequest):
         message=Message.CHAT_RESPONSE_SUCCESS,
         data={
             "answer": result
+            # 여기서 url과 json에 index를 할당해놔서, 답변 활용했던 index를 반환할 수 있도록 설정 - AI
         }
     )
 
-# 필요없는것 같은데
-@app.post("/activities", response_model=BaseResponse,
-    summary="사용자 활동 정보 저장",
-    description=
-        """
-        사용자의 활동(Activity) 정보를 서버에 저장합니다.  
-        활동에는 제목, 설명, 카테고리, 시작/종료 시간, 키워드, 위치 등의 정보가 포함됩니다.  
-        저장이 완료되면 고유한 활동 ID를 반환합니다.
-        """,
-    tags=["사용자 정보"],
+# 요청 바디 모델
+class UserActivities(BaseModel):
+    user_id: int = Field(..., alias="userId")
+    activities: List[int]
+
+class ReportRequest(BaseModel):
+    users: List[UserActivities]
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+@app.post(
+    "/report",
+    response_model=BaseResponse,
+    summary="리포트 생성",
+    description="사용자들에 대한 리포트를 생성해 알림을 전송합니다.",
     responses={
-        400: {
-            "model": BaseResponse,
-            "description": ErrorCode.INVALID_ACTIVITY_DATA.message
-        },
-        500: {
-            "model": BaseResponse,
-            "description": ErrorCode.ACTIVITY_SAVE_FAILED.message
-        }
-    })
-async def add_activity(activity: Activity):
-    activity_id = activity_service.save_activity(activity)
-    return response(
-        message=Message.ACTIVITY_SAVE_SUCCESS,
-        data={"activity_id": activity_id}
+        400: {"model": BaseResponse, "description": ErrorCode.INVALID_ACTIVITY_DATA.message},
+        500: {"model": BaseResponse, "description": ErrorCode.ACTIVITY_SAVE_FAILED.message},
+    },
+)
+async def send_report(req: ReportRequest):
+    # 검증: 중복 userId, 빈 activities, 날짜 범위
+    seen = set()
+    for u in req.users:
+        if not u.activities:
+            raise HTTPException(status_code=400, detail=ErrorCode.INVALID_ACTIVITY_DATA.message)
+        if u.user_id in seen:
+            raise HTTPException(status_code=400, detail=ErrorCode.INVALID_ACTIVITY_DATA.message)
+        seen.add(u.user_id)
+    if req.start_date and req.end_date and req.start_date > req.end_date:
+        raise HTTPException(status_code=400, detail=ErrorCode.INVALID_ACTIVITY_DATA.message)
+
+    # 기존 서비스 시그니처로 변환
+    user_payloads: List[Dict] = [{"user_id": u.user_id} for u in req.users]
+    user_activity_map: Dict[int, List[int]] = {u.user_id: u.activities for u in req.users}
+
+    report_service.generate_reports_for_users(
+        user_payloads=user_payloads,
+        user_activity_map=user_activity_map,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
+    return response(message=Message.ACTIVITY_SAVE_SUCCESS)

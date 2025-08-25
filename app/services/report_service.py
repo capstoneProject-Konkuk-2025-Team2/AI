@@ -1,156 +1,166 @@
-from app.config.celery_config import celery_app
-from datetime import datetime, timedelta
-from app.services.activity_service import calculate_user_stats
+from datetime import datetime
+from typing import List, Dict, Optional, Tuple
+import json
+from pathlib import Path
+from sqlalchemy.orm import Session
 from app.services.generator.insight_generator import (
     generate_insights, generate_recommendations
 )
 from app.chatbot.llm_feedback_chatbot import generate_feedback
-from app.models.activity import UserReport, ReportPeriod
-from app.services.user_service import load_all_users
+from app.models.activity import UserReport
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
-from app.services.notification_service import send_user_report_notification # 구현하기
+from app.services.activity_service import get_activity_service, SessionLocal  # 주신 코드 기준
+from app.services.pdf_service import create_report_pdf_bytes    
+from app.services.send_service import send_email_with_pdf_attachment
 
-@celery_app.task
-def test_hello(): # celery 테스트 - 완료함
-    print("Hello Celery")
-    return "Hello"
-
-
-@celery_app.task
-def generate_weekly_report(): # beat 테스트 - 완료함
-    print("테스트 리포트 생성됨")
-    return "테스트 리포트 생성됨"
-
-
-def generate_user_report(user_id: str, period: ReportPeriod) -> UserReport:
+# ----------------------------------------------------------------------
+# 단일 사용자 리포트 생성 함수
+# ----------------------------------------------------------------------
+def generate_user_report(
+    db: Session,
+    user_id: int,
+    activity_id_list: List[int],
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> UserReport:
+    """
+    주어진 사용자/활동/기간으로 리포트를 생성합니다.
+    ActivityService.calculate_user_stats 시그니처를 준수합니다.
+    """
     try:
-        end_date = datetime.now()
-        if period == ReportPeriod.WEEKLY:
-            start_date = end_date - timedelta(weeks=1)
-        elif period == ReportPeriod.MONTHLY:
-            start_date = end_date - timedelta(days=30)
-        else:
-            raise AppException(ErrorCode.VALIDATION_ERROR)
-        
+        activity_service = get_activity_service(db)
+
         # 통계
-        stats = calculate_user_stats(user_id, start_date, end_date)
-        
-        # 인사이트와 추천사항
+        stats = activity_service.calculate_user_stats(
+            user_id=user_id,
+            activity_id_list=activity_id_list,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # 인사이트 & 추천
         insights = generate_insights(stats)
         recommendations = generate_recommendations(stats)
-        
+
         # LLM 피드백
         feedback_message = generate_feedback(stats, insights, recommendations)
-        
+
+        # 모델(UserReport)은 주어진 것을 그대로 사용
         report = UserReport(
             user_id=user_id,
-            period=period,
             start_date=start_date,
             end_date=end_date,
             stats=stats,
             insights=insights,
             recommendations=recommendations,
-            feedback_message=feedback_message
+            feedback_message=feedback_message,
         )
-        
         return report
-        
+
     except AppException:
+        # 내부 정의된 예외는 그대로 전파
         raise
     except Exception as e:
-        print("오류 발생:", e)
+        print("[리포트 생성 오류]", e)
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
+    
 
-@celery_app.task(bind=True, name='app.services.report_service.generate_weekly_report')
-def generate_weekly_report(self):
+# ----------------------------------------------------------------------
+# 배치 리포트 생성 (스프링 서버 입력 포맷 반영)
+# ----------------------------------------------------------------------
+def generate_reports_for_users(
+    user_payloads: List[Dict],
+    # 각 사용자별 활동목록 매핑: {user_id: [activity_id, ...]}
+    user_activity_map: Dict[int, List[int]],
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> Tuple[str, List[int]]:
+    """
+    스프링 서버가 제공하는 사용자 리스트와 (user_id -> activity_id_list) 매핑을 이용해 배치 리포트를 생성합니다.
+
+    Parameters
+    ----------
+    user_payloads : List[Dict]
+        예: [{"id": 1, "name": "...", ...}, {"id": 2, ...}]
+        알림 발송 등 부가정보를 포함한 사용자 페이로드(스프링에서 전달받은 원소)
+    user_activity_map : Dict[int, List[int]]
+        예: {1: [101,102], 2: [201,202,203]}
+    period : ReportPeriod
+        리포트 주기 (기본 월간)
+    start_date, end_date : Optional[datetime]
+        통계 산출 기간
+    Returns
+    -------
+    result_message : str
+        처리 요약 메시지
+    failed_users : List[int]
+        실패한 사용자 id 목록
+    """
+    db: Optional[Session] = None
+    success_count = 0
+    failed_users: List[int] = []
+
     try:
-        users = load_all_users()
-        success_count = 0
-        failed_users = []
-        
-        for user in users:
+        db = SessionLocal()
+
+        for user in user_payloads:
+            user_id = user.get("id") #여기서 db를 접근하면 좋겠는데
+            if not user_id:
+                continue
+
             try:
-                user_id = user.get('id')
-                if not user_id:
-                    continue
+                activity_id_list = user_activity_map.get(user_id, [])
+                # 활동 아이디가 없다면 통계는 0으로 나올 수 있으나, 리포트는 생성 가능
+                report = generate_user_report(
+                    db=db,
+                    user_id=user_id,
+                    activity_id_list=activity_id_list,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+
+                print(f"[리포트 생성 완료] user_id={user_id}, activities={len(activity_id_list)}")
+
+                pdf_bytes = create_report_pdf_bytes(report)
                 
-                report = generate_user_report(user_id, ReportPeriod.WEEKLY)
-                success_count += 1
-                print(f"주간 리포트 생성 완료: {user_id}")
-                success = send_user_report_notification(report, user)
-                if not success:
+                out_dir = Path("reports")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"report_user_{user_id}_{start_date:%Y%m%d}-{end_date:%Y%m%d}.pdf"
+                (out_dir / filename).write_bytes(pdf_bytes)
+
+                print(f"[PDF 저장] {out_dir/filename}")
+
+                # 알림 전송
+                email_sent = send_email_with_pdf_attachment(
+                    to_email="pyeonk@konkuk.ac.kr",
+                    subject="[리포트] 활동 리포트가 도착했습니다",
+                    body=f"{user['name']}님,\n\n{start_date:%Y-%m-%d}부터 {end_date:%Y-%m-%d}까지의 활동 리포트를 첨부합니다.",
+                    pdf_bytes=pdf_bytes,
+                    filename=filename
+                )
+
+                if not email_sent:
                     failed_users.append(user_id)
 
+                # 성공 카운트는 한 번만 증가
                 success_count += 1
 
             except Exception as e:
                 failed_users.append(user_id)
-                print(f"오류 발생: {user_id} - {e}")
-        
-        result_message = f"주간 리포트 생성 완료: 성공 {success_count}명"
-        
-        if failed_users:
-            result_message += f", 실패 {len(failed_users)}명 ({', '.join(failed_users)})"
-        
-        return result_message
-        
-    except Exception as e:
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+                print(f"[오류] user_id={user_id} - {e}")
 
-@celery_app.task(bind=True, name='app.services.report_service.generate_monthly_report')
-def generate_monthly_report(self):
-    try:
-        users = load_all_users()
-        success_count = 0
-        failed_users = []
-        
-        for user in users:
-            try:
-                user_id = user.get('id')
-                if not user_id:
-                    continue
-                
-                report = generate_user_report(user_id, ReportPeriod.MONTHLY)
-                success_count += 1
-                print(f"월간 리포트 생성 완료: {user_id}")
-                success = send_user_report_notification(report, user)
-                if not success:
-                    failed_users.append(user_id)
-
-                success_count += 1
-                
-            except Exception as e:
-                failed_users.append(user_id)
-                print(f"오류 발생: {user_id} - {e}")
-        
+        # 결과 메시지
         result_message = f"월간 리포트 생성 완료: 성공 {success_count}명"
         if failed_users:
-            result_message += f", 실패 {len(failed_users)}명 ({', '.join(failed_users)})"
-        
-        return result_message
-        
-    except Exception as e:
-        raise self.retry(exc=e, countdown=60, max_retries=3)
+            failed_str = ", ".join(str(uid) for uid in failed_users)
+            result_message += f", 실패 {len(failed_users)}명 ({failed_str})"
 
-@celery_app.task(bind=True, name='app.services.report_service.generate_single_user_report')
-def generate_single_user_report(self, user_id: str, period: str):
-    try:
-        period_enum = ReportPeriod(period)
-        report = generate_user_report(user_id, period_enum)
-        
-        result_message = f"사용자 {user_id}의 {period} 리포트 생성 완료"
-        print(f"{result_message}")
-        # 사용자 아이디로 사용자 조회 - 근데 일단 보류 (화면을 추가할지 논의를 안해봤기 때문)
-        
-        return {
-            "status": "success",
-            "message": result_message,
-            "report_id": f"{report.user_id}_{report.period.value}_{report.created_at.strftime('%Y%m%d_%H%M%S')}"
-        }
-        
+        return result_message, failed_users
+
     except Exception as e:
-        error_message = f"사용자 {user_id}의 {period} 리포트 생성 실패: {str(e)}"
-        print(f"오류 발생: {error_message}")
-        
-        raise self.retry(exc=e, countdown=60, max_retries=3) 
+        print("[배치 처리 오류]", e)
+        raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
+    finally:
+        if db:
+            db.close()

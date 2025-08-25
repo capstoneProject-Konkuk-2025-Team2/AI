@@ -1,22 +1,50 @@
-from typing import List
+from typing import List, Any, Mapping
 from app.config.llm_config import client
 from app.utils.format.feedback_format import (
-    CATEGORY_NAMES, FEEDBACK_PROMPT_TEMPLATE, SYSTEM_PROMPT,
-    FALLBACK_NO_ACTIVITY, FALLBACK_TEMPLATE, DIVERSITY_MESSAGES,
+    FEEDBACK_PROMPT_TEMPLATE, SYSTEM_PROMPT,
+    FALLBACK_NO_ACTIVITY, FALLBACK_TEMPLATE,
     ERROR_FALLBACK, LLM_CONFIG
 )
-from app.models.activity import ActivityStats
 from app.utils.app_exception import AppException
 from app.utils.constants.error_codes import ErrorCode
 
 
-def generate_feedback(stats: ActivityStats, insights: List[str], recommendations: List[str]) -> str:
+def _get(obj: Any, key: str, default=None):
+    """객체 속성/딕셔너리 키를 동일 인터페이스로 안전하게 읽기"""
+    if hasattr(obj, key):
+        return getattr(obj, key)
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return default
 
+
+def _to_int(val: Any, default: int = 0) -> int:
+    try:
+        if val is None:
+            return default
+        return int(val)
+    except Exception:
+        return default
+
+
+def _to_float(val: Any, default: float = 0.0) -> float:
+    try:
+        if val is None:
+            return default
+        return float(val)
+    except Exception:
+        return default
+
+
+def generate_feedback(stats: Any, insights: List[str], recommendations: List[str]) -> str:
+    """
+    stats가 dict이든 객체이든 모두 처리. LLM 실패/응답이상 시 안전한 fallback 반환.
+    """
     try:
         prompt = _build_feedback_prompt(stats, insights, recommendations)
 
         response = client.chat.completions.create(
-            model=LLM_CONFIG["model"], # LLM_CONFIG가 feedback_format에 있는게 맞을까? 일단 빼놓음 (agent_rag_chatbot과 동일한 모델이면 config로 빼면 좋을 듯)
+            model=LLM_CONFIG["model"],
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
@@ -25,7 +53,8 @@ def generate_feedback(stats: ActivityStats, insights: List[str], recommendations
             temperature=LLM_CONFIG["temperature"]
         )
 
-        feedback = response.choices[0].message.content.strip()
+        # OpenAI 호환 형태 가정
+        feedback = (response.choices[0].message.content or "").strip()
 
         if not feedback or len(feedback) < 20:
             return generate_fallback_feedback(stats, insights)
@@ -34,14 +63,14 @@ def generate_feedback(stats: ActivityStats, insights: List[str], recommendations
 
     except Exception as e:
         print(f"오류 발생: {e}")
-        return generate_fallback_feedback(stats, insights) # LLM 실패면 그냥 빈문자열 반환할까?
+        return generate_fallback_feedback(stats, insights)
 
 
-def _build_feedback_prompt(stats: ActivityStats, insights: List[str], recommendations: List[str]) -> str:
+def _build_feedback_prompt(stats: Any, insights: List[str], recommendations: List[str]) -> str:
     try:
         stats_summary = _format_stats_for_prompt(stats)
-        insights_text = "\n".join(f"- {item}" for item in insights)
-        recommendations_text = "\n".join(f"- {item}" for item in recommendations)
+        insights_text = "\n".join(f"- {item}" for item in (insights or []))
+        recommendations_text = "\n".join(f"- {item}" for item in (recommendations or []))
 
         return FEEDBACK_PROMPT_TEMPLATE.format(
             stats_summary=stats_summary,
@@ -50,46 +79,38 @@ def _build_feedback_prompt(stats: ActivityStats, insights: List[str], recommenda
         )
     except Exception as e:
         print(f"오류 발생: {e}")
+        # ErrorCode.REPORT_GENERATION_FAILED 가 없다면 기존 코드의 적절한 코드로 교체하세요.
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
 
 
-def _format_stats_for_prompt(stats: ActivityStats) -> str:
+def _format_stats_for_prompt(stats: Any) -> str:
     try:
-        korean_distribution = {
-            CATEGORY_NAMES.get(cat, cat): count
-            for cat, count in stats.category_distribution.items()
-        }
-
-        most_active_korean = CATEGORY_NAMES.get(stats.most_active_category, stats.most_active_category)
+        total_activities = _to_int(_get(stats, "total_activities", 0), 0)
+        total_hours = _to_float(_get(stats, "total_hours", 0.0), 0.0)
 
         return (
-            f"- 총 활동 수: {stats.total_activities}개\n"
-            f"- 총 활동 시간: {stats.total_hours:.1f}시간\n"
-            f"- 가장 활발한 분야: {most_active_korean}\n"
-            f"- 참여 분야 다양성: {stats.diversity_score:.1f}\n"
-            f"- 분야별 활동 수: {korean_distribution}"
+            f"- 총 활동 수: {total_activities}개\n"
+            f"- 총 활동 시간: {total_hours:.1f}시간\n"
         )
     except Exception as e:
         print(f"오류 발생: {e}")
         return "통계 정보를 처리하는 중 오류가 발생했습니다."
 
 
-def generate_fallback_feedback(stats: ActivityStats, insights: List[str]) -> str:
+def generate_fallback_feedback(stats: Any, insights: List[str]) -> str:
     try:
-        if stats.total_activities == 0:
-            return FALLBACK_NO_ACTIVITY
+        total_activities = _to_int(_get(stats, "total_activities", 0), 0)
+        total_hours = _to_float(_get(stats, "total_hours", 0.0), 0.0)
 
-        main_category = CATEGORY_NAMES.get(stats.most_active_category, stats.most_active_category)
-        diversity_msg = DIVERSITY_MESSAGES["high"] if stats.diversity_score >= 0.5 else DIVERSITY_MESSAGES["low"]
+        if total_activities == 0:
+            return FALLBACK_NO_ACTIVITY
 
         return FALLBACK_TEMPLATE.format(
             period="이번",
-            total_activities=stats.total_activities,
-            total_hours=stats.total_hours,
-            main_category=main_category,
-            diversity_message=diversity_msg
+            total_activities=total_activities,
+            total_hours=total_hours
         )
 
     except Exception as e:
-        print(f"[오류 발생: {e}")
+        print(f"[오류 발생: {e}]")
         return ERROR_FALLBACK
