@@ -5,7 +5,9 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 import mysql.connector
 from mysql.connector import Error
+from dotenv import load_dotenv
 
+load_dotenv()
 # -------------------- 설정/상수 --------------------
 
 AMBIGUOUS_LOCATION_PATTERNS = [
@@ -492,11 +494,11 @@ class ExtracurricularParser:
 if __name__ == "__main__":
     # RDS 연결 설정
     db_config = {
-        'host': '127.0.0.1',
-        'database': 'test',  # 실제 존재하는 DB명으로 교체
-        'user': 'root',
-        'password': '1234',
-        'port': 3306
+        'host': os.getenv('HOST'),
+        'database': os.getenv('DBNAME'),
+        'user': os.getenv('USERNAME'),
+        'password': os.getenv('PASSWORD'),
+        'port': int(os.getenv('PORT'))
     }
 
     parser = ExtracurricularParser(db_config)
