@@ -13,6 +13,7 @@ class UserProfile(BaseModel):
     grade: Optional[str] = None # 학년
     interests: Optional[List[str]] = None # 관심사
     timetable: Optional[List[TimeSlot]] = None #시간표
+    email: Optional[str] = None # 이메일
 
 class ChatRequest(BaseModel):
     id: int # 사용자 아이디

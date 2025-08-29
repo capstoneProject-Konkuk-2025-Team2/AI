@@ -1,11 +1,13 @@
 import os
+import logging
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
-load_dotenv()  # .env 파일 로드
+logger = logging.getLogger(__name__)
+load_dotenv()
 
 def send_email_with_pdf_attachment(to_email, subject, body, pdf_bytes, filename):
     smtp_user = os.getenv("SMTP_USER")
@@ -14,7 +16,7 @@ def send_email_with_pdf_attachment(to_email, subject, body, pdf_bytes, filename)
     smtp_port = int(os.getenv("SMTP_PORT", 587))
 
     if not all([smtp_user, smtp_password, smtp_server, smtp_port]):
-        print("[환경변수 오류] SMTP 설정을 확인하세요.")
+        logger.warning("[환경변수 오류] SMTP 설정을 확인하세요.")
         return False
 
     # 이메일 메시지 생성
@@ -35,8 +37,8 @@ def send_email_with_pdf_attachment(to_email, subject, body, pdf_bytes, filename)
         server.login(smtp_user, smtp_password)
         server.send_message(message)
         server.quit()
-        print(f"[메일 전송 완료] {to_email}에게 {filename} 전송")
+        logger.info(f"[메일 전송 완료] {to_email}에게 {filename} 전송")
         return True
     except Exception as e:
-        print(f"[메일 전송 실패] {to_email}: {e}")
+        logger.error(f"[메일 전송 실패] {to_email}: {e}")
         return False

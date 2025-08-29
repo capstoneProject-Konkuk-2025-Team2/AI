@@ -1,7 +1,7 @@
 import os
 import json
 
-USER_TABLE_PATH = "app/data/users.json" # db에서 가져다 쓰는 방식이 좋을거 같지만 ? ai가 사용하니까 남겨둠
+USER_TABLE_PATH = "app/data/users.json"
 
 def save_user_profile(profile_data: dict):
     user_id = str(profile_data["id"])
@@ -29,3 +29,12 @@ def load_user_profile(user_id: str) -> dict | None:
         return users.get(str(user_id))
     except Exception:
         return None
+    
+def load_all_users() -> dict:
+    if not os.path.exists(USER_TABLE_PATH):
+        return {}
+    try:
+        with open(USER_TABLE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}

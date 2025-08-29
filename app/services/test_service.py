@@ -1,3 +1,4 @@
+# test1
 # from app.utils.db import engine
 
 # def check_db_connection():
@@ -11,20 +12,18 @@
 # if __name__ == "__main__":
 #     check_db_connection()
 
+# test2
 from datetime import datetime
 from app.services.report_service import generate_reports_for_users
 
-user_payloads = [
-    {"id": 1, "name": "홍길동", "email": "hong@test.com"},
-    {"id": 2, "name": "김철수", "email": "kim@test.com"}
-]
+# user_activity_map = {
+#     1: [1, 2, 3],
+#     2: [1, 2]
+# }
 user_activity_map = {
-    1: [1, 2, 3],
-    2: [1, 2]
+    1: [1, 2, 3]
 }
-
 msg, failed = generate_reports_for_users(
-    user_payloads=user_payloads,
     user_activity_map=user_activity_map,
     start_date=datetime(2025, 8, 1),
     end_date=datetime(2025, 8, 25),
@@ -32,7 +31,7 @@ msg, failed = generate_reports_for_users(
 
 print(msg, failed)
 
-# send_hello_email.py
+# test3
 # import smtplib
 # from email.mime.text import MIMEText
 

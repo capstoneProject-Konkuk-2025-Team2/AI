@@ -1,5 +1,4 @@
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict
 from collections import defaultdict, Counter
 from sqlalchemy.orm import Session
@@ -8,6 +7,9 @@ from sqlalchemy.orm import sessionmaker
 from app.utils.db import engine
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Automap 설정
 Base = automap_base()
@@ -19,12 +21,9 @@ class ActivityService:
     def __init__(self, db: Session):
         self.db = db
     
-    def calculate_user_stats(self, user_id: int, activity_id_list: List[int], 
-                           start_date: Optional[datetime] = None, 
-                           end_date: Optional[datetime] = None) -> Dict:
-        """사용자의 비교과 활동 통계 계산"""
+    def calculate_user_stats(self, user_id: int, activity_id_list: List[int]) -> Dict:
         try:
-            activities = self.get_user_activities(activity_id_list, start_date, end_date)
+            activities = self.get_user_activities(activity_id_list)
             
             if not activities:
                 return {
@@ -49,32 +48,25 @@ class ActivityService:
             }
             
         except Exception as e:
-            print(f"통계 계산 오류: {e}")
+            logger.error(f"통계 계산 오류: {e}")
             raise AppException(ErrorCode.DATA_ACCESS_ERROR)
     
-    def get_user_activities(self, activity_id_list: List[int],
-                          start_date: Optional[datetime] = None, 
-                          end_date: Optional[datetime] = None) -> List:
-        """사용자의 비교과 활동 목록 조회"""
+    def get_user_activities(self, activity_id_list: List[int]) -> List:
         try:
             # 기본 쿼리: activity_id_list에 있는 활동들만 조회
             query = self.db.query(Extracurricular).filter(
-                Extracurricular.extracurricular_id.in_(activity_id_list),
+                Extracurricular.extracurricular_pk_id.in_(activity_id_list), #일단 pk로 조회
                 Extracurricular.is_deleted == 0  # 삭제되지 않은 활동만
             )
             
-            # 날짜 필터링 (활동 시작일 기준)
-            if start_date:
-                query = query.filter(Extracurricular.activity_start >= start_date)
-            if end_date:
-                query = query.filter(Extracurricular.activity_start <= end_date)
-            
             activities = query.all()
+            for a in activities:
+                print(f"[{a.extracurricular_pk_id}] {a.title}")
             
             return activities
             
         except Exception as e:
-            print(f"활동 조회 오류: {e}")
+            logger.error(f"활동 조회 오류: {e}")
             raise AppException(ErrorCode.ACTIVITY_LOAD_FAILED)
     
     def _calculate_duration_hours(self, activity) -> float:
@@ -131,5 +123,4 @@ class ActivityService:
 
 # 서비스 팩토리 함수
 def get_activity_service(db: Session) -> ActivityService:
-    """ActivityService 인스턴스 생성"""
     return ActivityService(db)

@@ -1,39 +1,20 @@
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
-from pathlib import Path
-from sqlalchemy.orm import Session
+from app.models.activity import UserReport
 import io
 import os
-
-# ReportLab imports
+import logging
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm, inch
+from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# 기존 imports (WeasyPrint 제거!)
-from app.services.generator.insight_generator import (
-    generate_insights, generate_recommendations
-)
-from app.chatbot.llm_feedback_chatbot import generate_feedback
-from app.models.activity import UserReport
-from app.utils.constants.error_codes import ErrorCode
-from app.utils.app_exception import AppException
-from app.services.activity_service import get_activity_service, SessionLocal
+logger = logging.getLogger(__name__)
 
-# ----------------------------------------------------------------------
-# 한글 폰트 등록
-# ----------------------------------------------------------------------
 def register_korean_fonts():
-    """한글 폰트 등록"""
     try:
         # 폰트 파일 경로
         base_path = os.path.join(os.path.dirname(__file__), '..', 'utils', 'format', 'fonts')
@@ -50,19 +31,15 @@ def register_korean_fonts():
                          normal='NotoSansKR-Regular',
                          bold='NotoSansKR-Bold')
         
-        print("한글 폰트 등록 완료")
+        logger.info("한글 폰트 등록 완료")
         return True
         
     except Exception as e:
-        print(f"폰트 등록 실패: {e}")
+        logger.error(f"폰트 등록 실패: {e}")
         # 폰트 등록 실패시 기본 폰트 사용
         return False
 
-# ----------------------------------------------------------------------
-# PDF 생성 함수
-# ----------------------------------------------------------------------
 def create_report_pdf_bytes(report: UserReport) -> bytes:
-    """UserReport 객체를 PDF bytes로 변환"""
     # 한글 폰트 등록
     font_registered = register_korean_fonts()
     font_name = 'NotoSansKR-Regular' if font_registered else 'Helvetica'
@@ -114,7 +91,7 @@ def create_report_pdf_bytes(report: UserReport) -> bytes:
     created_str = report.created_at.strftime('%Y-%m-%d %H:%M') if hasattr(report, 'created_at') and report.created_at else datetime.now().strftime('%Y-%m-%d %H:%M')
     
     meta_data = [
-        ['사용자 ID', str(report.user_id)],
+        ['사용자 이름', str(report.user_name)],
         ['리포트 기간', f"{start_date_str} ~ {end_date_str}"],
         ['생성 일시', created_str],
     ]
@@ -208,7 +185,7 @@ def create_report_pdf_bytes(report: UserReport) -> bytes:
         textColor=colors.HexColor('#6b7280'),
         fontName=font_name
     )
-    story.append(Paragraph("© OO대학교 비교과센터 | 문의: neis@school.ac.kr", footer_style))
+    story.append(Paragraph("© 건국대학교 비교과센터 | 문의: pyeonk@konkuk.ac.kr", footer_style))
     
     # PDF 생성
     doc.build(story)
