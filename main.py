@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.chatbot.agent_rag_chatbot import make_agent, initialize_activities, resolve_followup_question, activities
+from app.chatbot.agent_rag_chatbot import run_query, initialize_activities, activities
 from app.services.report_service import generate_reports_for_users
 from app.utils.constants.message import Message
 from app.models.response.base_response import response, BaseResponse
@@ -11,7 +11,6 @@ from app.utils.app_exception import AppException
 from fastapi.exceptions import RequestValidationError
 from app.utils.exception_handler import app_exception_handler, generic_exception_handler, validation_exception_handler
 from datetime import datetime
-from fastapi import HTTPException
 
 app = FastAPI()
 
@@ -63,9 +62,10 @@ async def chat_with_bot(request: ChatRequest):
     if not activities:
         initialize_activities()
 
-    agent = make_agent(user_profile)
-    query = resolve_followup_question(user_question);
-    result = agent.run(query)
+    # agent = make_agent(user_profile)
+    # query = resolve_followup_question(user_question);
+    # result = agent.run(query)
+    result = run_query(user_profile, user_question)
 
     return response(
         message=Message.CHAT_RESPONSE_SUCCESS,
