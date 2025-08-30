@@ -22,6 +22,7 @@ Thumbs.db
 # Backup files (Docker 빌드 시 제외)
 backup/
 app/services/backup/
+app/data/data_save.py
 
 # Logs
 *.log
@@ -29,3 +30,4 @@ app/services/backup/
 # Environment files
 .env
 .env.local
+

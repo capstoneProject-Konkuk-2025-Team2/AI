@@ -1,25 +1,16 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.chatbot.agent_rag_chatbot import run_query
-from app.chatbot.agent_rag_chatbot import (
-    make_agent,
-    initialize_activities,
-    resolve_followup_question,
-    activities
-)
+from app.chatbot.agent_rag_chatbot import run_query, initialize_activities, activities
+from app.services.report_service import generate_reports_for_users
 from app.utils.constants.message import Message
 from app.models.response.base_response import response, BaseResponse
+from app.models.request.report_request import ReportRequest
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
 from fastapi.exceptions import RequestValidationError
-from app.utils.exception_handler import (
-    app_exception_handler,
-    generic_exception_handler,
-    validation_exception_handler
-)
-from app.models.activity import Activity
-from app.services import activity_service
+from app.utils.exception_handler import app_exception_handler, generic_exception_handler, validation_exception_handler
+from datetime import datetime
 
 app = FastAPI()
 
@@ -37,14 +28,8 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
     description="사용자 정보를 등록하고 프로필을 저장합니다.",
     tags=["사용자 정보"],
     responses={
-        422: {
-            "model": BaseResponse,
-            "description": ErrorCode.VALIDATION_ERROR.message
-        },
-        500: {
-            "model": BaseResponse,
-            "description": ErrorCode.INTERNAL_SERVER_ERROR.message
-        }
+        422: {"model": BaseResponse, "description": ErrorCode.VALIDATION_ERROR.message},
+        500: {"model": BaseResponse, "description": ErrorCode.INTERNAL_SERVER_ERROR.message}
     })
 async def register_user(profile: UserProfile):
     save_user_profile(profile.model_dump())
@@ -61,22 +46,10 @@ async def register_user(profile: UserProfile):
     description="사용자 프로필을 기반으로 챗봇과 자연어로 대화를 수행합니다.",
     tags=["챗봇 통신"],
     responses={
-        400: {
-            "model": BaseResponse,
-            "description": ErrorCode.USER_PROFILE_MISSING.message
-        },
-        404: {
-            "model": BaseResponse,
-            "description": ErrorCode.NO_RELEVANT_DOCUMENT.message
-        },
-        422: {
-            "model": BaseResponse,
-            "description": ErrorCode.VALIDATION_ERROR.message
-        },
-        500: {
-            "model": BaseResponse,
-            "description": ErrorCode.INTERNAL_SERVER_ERROR.message
-        }
+        400: {"model": BaseResponse, "description": ErrorCode.USER_PROFILE_MISSING.message},
+        404: {"model": BaseResponse, "description": ErrorCode.NO_RELEVANT_DOCUMENT.message},
+        422: {"model": BaseResponse, "description": ErrorCode.VALIDATION_ERROR.message},
+        500: {"model": BaseResponse, "description": ErrorCode.INTERNAL_SERVER_ERROR.message}
     })
 async def chat_with_bot(request: ChatRequest):
     user_id = request.id
@@ -98,40 +71,60 @@ async def chat_with_bot(request: ChatRequest):
         message=Message.CHAT_RESPONSE_SUCCESS,
         data={
             "answer": result
+            # 여기서 url과 json에 index를 할당해놔서, 답변 활용했던 index를 반환할 수 있도록 설정 - AI
         }
     )
 
-# 필요없는것 같은데
-@app.post("/activities", response_model=BaseResponse,
-    summary="사용자 활동 정보 저장",
-    description=
-        """
-        사용자의 활동(Activity) 정보를 서버에 저장합니다.  
-        활동에는 제목, 설명, 카테고리, 시작/종료 시간, 키워드, 위치 등의 정보가 포함됩니다.  
-        저장이 완료되면 고유한 활동 ID를 반환합니다.
-        """,
-    tags=["사용자 정보"],
+@app.post(
+    "/report",
+    response_model=BaseResponse,
+    summary="리포트 생성",
+    description="사용자들에 대한 리포트를 생성해 알림을 전송합니다.",
+    tags=["리포트 전송"],
     responses={
-        400: {
-            "model": BaseResponse,
-            "description": ErrorCode.INVALID_ACTIVITY_DATA.message
-        },
-        500: {
-            "model": BaseResponse,
-            "description": ErrorCode.ACTIVITY_SAVE_FAILED.message
-        }
-    })
-async def add_activity(activity: Activity):
-    activity_id = activity_service.save_activity(activity)
-    return response(
-        message=Message.ACTIVITY_SAVE_SUCCESS,
-        data={"activity_id": activity_id}
-    )
+        400: {"model": BaseResponse, "description": ErrorCode.INVALID_ACTIVITY_DATE_DATA.message},
+        400: {"model": BaseResponse, "description": ErrorCode.INVALID_ACTIVITY_DATA.message},
+        422: {"model": BaseResponse, "description": ErrorCode.VALIDATION_ERROR.message},
+        500: {"model": BaseResponse, "description": ErrorCode.REPORT_GENERATION_FAILED.message},
+        500: {"model": BaseResponse, "description": ErrorCode.ACTIVITY_LOAD_FAILED.message},
+        500: {"model": BaseResponse, "description": ErrorCode.DATA_ACCESS_ERROR.message},
+    },
+)
+async def create_report(request: ReportRequest):
+    
+    # 기본 검증
+    if not request.users:
+        raise AppException(ErrorCode.INVALID_ACTIVITY_DATA)
 
-#     # --- Warmup on startup ---
-# from app.chatbot.agent_rag_chatbot import initialize_activities, activities
+    # 날짜 파싱
+    try:
+        start_date = datetime.fromisoformat(request.start_date)
+        end_date = datetime.fromisoformat(request.end_date)
+    except ValueError:
+        raise AppException(ErrorCode.INVALID_ACTIVITY_DATE_DATA)
 
-# @app.on_event("startup")
-# def warmup():
-#     if not activities:
-#        initialize_activities()
+    if end_date < start_date:
+        raise AppException(ErrorCode.VALIDATION_ERROR)
+
+
+    try:
+        user_activity_map = {u.userId: u.activities for u in request.users}
+    except Exception:
+        raise AppException(ErrorCode.INVALID_ACTIVITY_DATA)
+
+
+    try:
+        msg, failed = generate_reports_for_users(
+            user_activity_map=user_activity_map,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except AppException:
+        raise
+    except Exception:
+        raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
+
+    if failed:
+        raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
+
+    return BaseResponse(success=True, code = 200, message=msg, failed=failed)

@@ -25,7 +25,8 @@
         "startTime": "15:00",
         "endTime": "16:30"
       }
-    ]
+    ],
+    "email": "pyeonk@konkuk.ac.kr"
   },
   "2": {
     "id": 2,
@@ -53,6 +54,7 @@
         "startTime": "13:00",
         "endTime": "14:30"
       }
-    ]
+    ],
+    "email": "pyeonk@konkuk.ac.kr"
   }
 }

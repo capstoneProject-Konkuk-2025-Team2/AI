@@ -1,75 +1,66 @@
-from typing import List
-from app.models.activity import ActivityStats
+# app/services/generator/insight_generator.py
+
+from typing import List, Any, Mapping
 from app.utils.constants.error_codes import ErrorCode
 from app.utils.app_exception import AppException
 from app.utils.format.insights_format import (
     INSIGHTS_CONFIG, RECOMMENDATIONS_CONFIG, THRESHOLDS
 )
-from app.models.activity import CATEGORY_NAMES
 
-def generate_insights(stats: ActivityStats) -> List[str]:
+def _get(obj: Any, key: str, default=None):
+    # 객체의 속성 또는 dict 키를 동일하게 읽기
+    if hasattr(obj, key):
+        return getattr(obj, key)
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return default
+
+def generate_insights(stats: Any) -> List[str]:
     try:
-        insights = []
-        
-        if stats.total_activities == 0:
+        insights: List[str] = []
+
+        total_activities = _get(stats, "total_activities", 0)
+        if total_activities == 0:
             insights.append(INSIGHTS_CONFIG["no_activity"])
             return insights
-        
-        if stats.most_active_category:
-            category_name = CATEGORY_NAMES.get(stats.most_active_category, stats.most_active_category)
-            insights.append(INSIGHTS_CONFIG["category_activity"].format(category_name=category_name))
-        
-        diversity_insight = get_diversity_insight(stats.diversity_score)
-        if diversity_insight:
-            insights.append(diversity_insight)
-        
-        activity_insight = get_activity_count_insight(stats.total_activities)
+
+        activity_insight = get_activity_count_insight(total_activities)
         if activity_insight:
             insights.append(activity_insight)
-        
-        time_insight = get_time_investment_insight(stats.total_hours)
+
+        total_hours = _get(stats, "total_hours", 0.0)
+        time_insight = get_time_investment_insight(total_hours)
         if time_insight:
             insights.append(time_insight)
-        
+
         return insights
     except Exception as e:
         print("오류 발생:", e)
+        # ↓ ErrorCode 수정은 2)에서 설명
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
 
-def generate_recommendations(stats: ActivityStats) -> List[str]:
+def generate_recommendations(stats: Any) -> List[str]:
     try:
-        recommendations = []
-        
-        if stats.total_activities == 0:
+        recommendations: List[str] = []
+
+        total_activities = _get(stats, "total_activities", 0)
+        if total_activities == 0:
             return RECOMMENDATIONS_CONFIG["no_activity"]
-        
-        missing_recommendation = get_missing_category_recommendation(stats)
-        if missing_recommendation:
-            recommendations.append(missing_recommendation)
-        
-        if stats.total_activities < THRESHOLDS["activity_count"]["medium"]:
+
+        if total_activities < THRESHOLDS["activity_count"]["medium"]:
             recommendations.append(RECOMMENDATIONS_CONFIG["low_activity"])
-        
+
         if is_evening_active(stats):
             recommendations.append(RECOMMENDATIONS_CONFIG["time_pattern"])
-        
+
         if not recommendations:
             recommendations.append(RECOMMENDATIONS_CONFIG["default"])
-        
+
         return recommendations
     except Exception as e:
         print("오류 발생:", e)
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
     
-
-
-def get_diversity_insight(diversity_score: float) -> str:
-    if diversity_score == 1.0:
-        return INSIGHTS_CONFIG["diversity"][1.0]
-    elif diversity_score >= 0.5:
-        return INSIGHTS_CONFIG["diversity"][0.5]
-    else:
-        return INSIGHTS_CONFIG["diversity"][0.0]
 
 def get_activity_count_insight(total_activities: int) -> str:
     if total_activities >= THRESHOLDS["activity_count"]["high"]:
@@ -87,14 +78,7 @@ def get_time_investment_insight(total_hours: float) -> str:
         return INSIGHTS_CONFIG["time_investment"]["medium"]
     return ""
 
-def get_missing_category_recommendation(stats: ActivityStats) -> str:
-    if stats.diversity_score < 1.0:
-        if "career" not in stats.category_distribution:
-            return RECOMMENDATIONS_CONFIG["missing_category"]["career"]
-        elif "etc" not in stats.category_distribution:
-            return RECOMMENDATIONS_CONFIG["missing_category"]["etc"]
-    return ""
-
-def is_evening_active(stats: ActivityStats) -> bool:
-    most_active_hour = stats.time_pattern.get("most_active_hour", 9)
-    return most_active_hour > THRESHOLDS["evening_hour"] 
+def is_evening_active(stats: Any) -> bool:
+    time_pattern = _get(stats, "time_pattern", {}) or {}
+    most_active_hour = time_pattern.get("most_active_hour", 9)
+    return most_active_hour > THRESHOLDS["evening_hour"]
