@@ -55,7 +55,7 @@ class ActivityService:
         try:
             # 기본 쿼리: activity_id_list에 있는 활동들만 조회
             query = self.db.query(Extracurricular).filter(
-                Extracurricular.extracurricular_pk_id.in_(activity_id_list), #일단 pk로 조회
+                Extracurricular.extracurricular_id.in_(activity_id_list),
                 Extracurricular.is_deleted == 0  # 삭제되지 않은 활동만
             )
             
