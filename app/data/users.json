@@ -1,32 +1,21 @@
 {
   "1": {
     "id": 1,
-    "name": "조은영",
-    "major": "컴퓨터공학과",
-    "grade": "3학년",
+    "name": "Tina",
+    "major": "컴퓨터공학",
+    "grade": "4",
     "interests": [
       "AI",
-      "데이터",
-      "프로그래밍"
+      "데이터사이언스"
     ],
     "timetable": [
       {
         "day": "월",
-        "startTime": "09:00",
-        "endTime": "10:30"
-      },
-      {
-        "day": "화",
         "startTime": "13:00",
-        "endTime": "14:30"
-      },
-      {
-        "day": "수",
-        "startTime": "15:00",
-        "endTime": "16:30"
+        "endTime": "15:00"
       }
     ],
-    "email": "pyeonk@konkuk.ac.kr"
+    "email": "tina@example.com"
   },
   "2": {
     "id": 2,

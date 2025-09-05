@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.chatbot.agent_rag_chatbot import run_query, initialize_activities, activities
+from app.chatbot.Agent_Rag_Chatbot import run_query, initialize_activities, activities
 from app.services.report_service import generate_reports_for_users
 from app.utils.constants.message import Message
 from app.models.response.base_response import response, BaseResponse
@@ -11,12 +11,19 @@ from app.utils.app_exception import AppException
 from fastapi.exceptions import RequestValidationError
 from app.utils.exception_handler import app_exception_handler, generic_exception_handler, validation_exception_handler
 from datetime import datetime
+import os, glob
+from datetime import datetime, timedelta
+from fastapi.staticfiles import StaticFiles   
 
 app = FastAPI()
 
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
+REPORT_DIR = os.getenv("REPORT_DIR", "reports")
+os.makedirs(REPORT_DIR, exist_ok=True)
+app.mount("/reports", StaticFiles(directory=REPORT_DIR, html=False), name="reports")
 
 # @app.get("/error-test") - 에러 핸들러 테스트용(해봄)
 # def test_error():
@@ -66,6 +73,8 @@ async def chat_with_bot(request: ChatRequest):
     # query = resolve_followup_question(user_question);
     # result = agent.run(query)
     result = run_query(user_profile, user_question)
+    # from app.chatbot.Agent_Rag_Chatbot import chat_reply
+    # result = chat_reply(user_profile, user_question)
 
     return response(
         message=Message.CHAT_RESPONSE_SUCCESS,
@@ -128,3 +137,4 @@ async def create_report(request: ReportRequest):
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
 
     return BaseResponse(success=True, code = 200, message=msg, failed=failed)
+
