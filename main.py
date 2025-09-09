@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
 from app.services.user_service import save_user_profile, load_user_profile
-from app.chatbot.Agent_Rag_Chatbot import run_query, initialize_activities, activities
+from app.chatbot.Agent_Rag_Chatbot import api_run, initialize_activities, activities
+#from app.chatbot.Agent_Rag_Chatbot import run_query, initialize_activities, activities
 from app.services.report_service import generate_reports_for_users
 from app.utils.constants.message import Message
 from app.models.response.base_response import response, BaseResponse
@@ -69,19 +70,25 @@ async def chat_with_bot(request: ChatRequest):
     if not activities:
         initialize_activities()
 
-    # agent = make_agent(user_profile)
-    # query = resolve_followup_question(user_question);
-    # result = agent.run(query)
-    result = run_query(user_profile, user_question)
-    # from app.chatbot.Agent_Rag_Chatbot import chat_reply
-    # result = chat_reply(user_profile, user_question)
+
+    
+    # JSON의 경우 아래 실행
+    #result = run_query(user_profile, user_question)
+    # DB의 경우 아래 실행
+    result = api_run(user_profile, user_question)
+    
+    
+
 
     return response(
         message=Message.CHAT_RESPONSE_SUCCESS,
-        data={
-            "answer": result
-            # 여기서 url과 json에 index를 할당해놔서, 답변 활용했던 index를 반환할 수 있도록 설정 - AI
-        }
+        # JSON의 경우 아래
+        # data={
+        #     "answer": result
+        #     # 여기서 url과 json에 index를 할당해놔서, 답변 활용했던 index를 반환할 수 있도록 설정 - AI
+        # }
+        #DB의 경우
+        data = result
     )
 
 @app.post(

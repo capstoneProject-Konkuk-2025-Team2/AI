@@ -318,10 +318,13 @@ def _schedule_ok_for_user(schedule: dict | None, user_profile: dict) -> bool:
             return False
     return True
 
+
 def search_top5_programs_with_explanation(query: str, user_profile: dict):
     """
-    반환: (텍스트, [id...])
-    - 텍스트: JSON 버전처럼 각 항목에 점수 3종 표시
+    반환: (텍스트, [id...], [structured...])
+    - 텍스트: 사용자용 설명
+    - [id...]: 숫자 ID 배열
+    - [structured...]: API 응답용 딕트 리스트
     """
     global recent_top5_idx_title_map, recent_top5_idx_id_map, last_queried_title
 
@@ -365,7 +368,7 @@ def search_top5_programs_with_explanation(query: str, user_profile: dict):
         scored.append((idx, item["id"], title, score, qsim, isim, fields.get("KUM마일리지")))
 
     if not scored:
-        return ("조건에 맞는 프로그램을 찾지 못했습니다.", [])
+        return ("조건에 맞는 프로그램을 찾지 못했습니다.", [], [])
 
     top5 = sorted(scored, key=lambda x: x[3], reverse=True)[:5]
 
@@ -378,15 +381,18 @@ def search_top5_programs_with_explanation(query: str, user_profile: dict):
     # 후속 '그건...' 안정화를 위해 1등 제목 보관
     last_queried_title = top5[0][2]
 
-    # (4) 출력 포맷: JSON 버전과 동일하게 점수 노출
+    # (4) 출력 텍스트 + ids + structured
     lines = []
+    ids_out = []
+    structured = []
     for i, (_idx, _id, title, score, qsim, isim, kum) in enumerate(top5, start=1):
         miles = f" — KUM마일리지: {kum}점" if kum else ""
         lines.append(f"{i}. {title}{miles}\n    - 종합 점수: {score:.3f} (질문 유사도: {qsim:.3f}, 관심사 유사도: {isim:.3f})")
+        ids_out.append(_id)
+        structured.append(_build_reco_item(_id, title, score, qsim, isim, kum))
 
     text_out = "\n\n".join(lines)
-    ids_out = [t[1] for t in top5]
-    return (text_out, ids_out)
+    return (text_out, ids_out, structured)
 
 
 # -----------------------------
@@ -522,6 +528,19 @@ def _classify_intent(original_q: str) -> str:
     return "reco"
 
 
+def _build_reco_item(_id: int, title: str, score: float, qsim: float, isim: float, kum: str | None):
+    """API 응답용 추천 아이템 포맷"""
+    # KUM 마일리지는 숫자만 (없으면 None)
+    kum_num = int(re.search(r"\d+", kum).group(0)) if isinstance(kum, str) and re.search(r"\d+", kum) else None
+    return {
+        "extracurricular_id": int(_id),
+        "title": title,
+        "score": float(score),
+        "question_similarity": float(qsim),
+        "interest_similarity": float(isim),
+        "kum_mileage": kum_num,
+    }
+
 # -----------------------------
 # LangChain Tool 래핑 (JSON 스타일)
 # -----------------------------
@@ -564,21 +583,52 @@ def make_agent(user_profile):
 def run_query(user_profile: dict, user_question: str):
     """
     외부에서 호출하는 단일 엔트리.
-    - 추천 intent: (텍스트, [id...])  ← 텍스트 안에 점수표시 포함
+    - 추천 intent: (텍스트, [id...])
     - 필드/요약 intent: (텍스트, [])
     """
     if not activities or not title_embeddings:
         initialize_activities()
 
-    # 후속 치환 먼저 (숫자/그건)
     q = resolve_followup_question(user_question)
     intent = _classify_intent(user_question)
 
     if intent == "field":
         return (answer_program_question_by_title(q), [])
 
-    txt, ids = search_top5_programs_with_explanation(q, user_profile)
+    txt, ids, _structured = search_top5_programs_with_explanation(q, user_profile)
     return (txt, ids)
+
+
+def api_run(user_profile: dict, user_question: str) -> dict:
+    """
+    FastAPI가 그대로 JSON 직렬화해 내보낼 수 있는 응답.
+    {
+      "answer": "...텍스트...",
+      "recommendations": [{extracurricular_id, title, score, question_similarity, interest_similarity, kum_mileage}, ...],
+      "recommended_ids": [ ... ]
+    }
+    """
+    if not activities or not title_embeddings:
+        initialize_activities()
+
+    q = resolve_followup_question(user_question)
+    intent = _classify_intent(user_question)
+
+    # 필드 질문이면 추천 리스트는 비우고 answer만
+    if intent == "field":
+        ans = answer_program_question_by_title(q)
+        return {
+            "answer": ans,
+            "recommendations": [],
+            "recommended_ids": []
+        }
+
+    text, ids, structured = search_top5_programs_with_explanation(q, user_profile)
+    return {
+        "answer": text,
+        "recommendations": structured,
+        "recommended_ids": ids
+    }
 
 
 # -----------------------------
