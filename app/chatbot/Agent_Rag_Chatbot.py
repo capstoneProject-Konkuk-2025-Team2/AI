@@ -1,38 +1,92 @@
-## ---0908 --
-"""
-DB-backed Agent (JSON 성능 이식판)
-- DB(extracurricular)에서 로드하지만, JSON 기반 코드의 검색/필드응답/후속질의 UX와 점수표시를 그대로 재현
-- 특징:
-  1) 추천 리스트에 종합점수/질문유사도/관심사유사도 표기 (JSON 버전과 동일)
-  2) '1번', '숫자만(4)', '그건 …' 후속질의 안정 동작
-  3) KUM 마일리지 다중 매칭 → 최댓값 사용
-  4) 시간표 충돌 배제 + (선택) 질의 내 요일/시간대 제약 반영
-  5) 필드 질문(신청기간/진행기간/대상자/URL/장소/수료증/KUM마일리지) 단답 우선
-"""
-import os
-import re
-import json
-import pickle
-import hashlib
-import unicodedata
+import os, re, pickle, hashlib, unicodedata
 from pathlib import Path
-from datetime import datetime
-
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from datetime import datetime, timedelta   
+import faiss
 
-from dotenv import load_dotenv
 from sqlalchemy import text as sql_text
-from langchain.agents import initialize_agent, Tool
-from langchain.agents.agent_types import AgentType
-
-from app.config.llm_config import client, llm
-from app.services.user_service import load_user_profile
+from app.config.llm_config import client
 from app.utils.db import engine
+
+# -----------------------------
+# 캐시 및 저장 설정
+# -----------------------------
+CACHE_DIR = Path(os.getenv("CACHE_DIR", "app/.cache"))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+FAISS_INDEX_FILE = CACHE_DIR / "chunk_faiss.index"
+CHUNK_META_FILE = CACHE_DIR / "chunk_meta.pkl"
+EMBED_MODEL = "text-embedding-3-small"
+EMBED_CACHE_FILE = CACHE_DIR / "embeddings.pkl"
+
+## 임베딩 "디스크 캐시 + 배치 호출"
+
+def _load_embed_cache():
+    if EMBED_CACHE_FILE.exists():
+        try:
+            with open(EMBED_CACHE_FILE, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_embed_cache(cache):
+    try:
+        with open(EMBED_CACHE_FILE, "wb") as f:
+            pickle.dump(cache, f)
+    except Exception:
+        pass
+
+# 전역 1회 로드
+_embed_cache = _load_embed_cache()
+
+def get_embedding(text: str) -> np.ndarray:
+    key = hashlib.md5((text + "|" + EMBED_MODEL).encode("utf-8")).hexdigest()
+    # 메모리 + 디스크 캐시
+    if key in _embed_cache:
+        return _embed_cache[key]
+    local_cache = getattr(get_embedding, "_cache", {})
+    if key in local_cache:
+        return local_cache[key]
+
+    res = client.embeddings.create(input=[text], model=EMBED_MODEL)
+    vec = np.array(res.data[0].embedding, dtype="float32").reshape(1, -1)
+
+    local_cache[key] = vec
+    get_embedding._cache = local_cache
+    _embed_cache[key] = vec
+    _save_embed_cache(_embed_cache)
+    return vec
+
+# 제목 임베딩 "배치" 버전 (initialize_indexes에서 사용)
+def get_embeddings_batch(texts):
+    # 캐시에 없는 것만 모아서 한 번에 요청
+    uncached = []
+    keys = []
+    out = []
+    for t in texts:
+        k = hashlib.md5((t + "|" + EMBED_MODEL).encode("utf-8")).hexdigest()
+        keys.append(k)
+        if k not in _embed_cache:
+            uncached.append(t)
+
+    if uncached:
+        res = client.embeddings.create(input=uncached, model=EMBED_MODEL)
+        idx = 0
+        for t in uncached:
+            vec = np.array(res.data[idx].embedding, dtype="float32").reshape(1, -1)
+            k = hashlib.md5((t + "|" + EMBED_MODEL).encode("utf-8")).hexdigest()
+            _embed_cache[k] = vec
+            idx += 1
+        _save_embed_cache(_embed_cache)
+
+    for i, t in enumerate(texts):
+        out.append(_embed_cache[keys[i]])
+    return out
 
 
 # -----------------------------
-# 필드 패턴 & 키워드 (JSON 버전과 동일/확장)
+# 필드 정규식
 # -----------------------------
 FIELD_PATTERNS = {
     "신청기간": r"(?:신청\s*기간|접수\s*기간)\s*:\s*([0-9.\-~\s:()]+)",
@@ -41,23 +95,11 @@ FIELD_PATTERNS = {
     "URL": r"(?:URL|링크|주소)\s*:\s*(\S+)",
     "KUM마일리지": r"(?:KUM|쿰)\s*마일리(?:지|리지)\s*([0-9]+)\s*점",
     "장소": r"(?:장소|위치)\s*:\s*([^\n]+)",
-    "수료증": r"(?:수료증)\s*[:\-]?\s*(있음|없음)"
+    "수료증": r"(?:수료증)\s*[:\-]?\s*(있음|없음)" 
 }
-
-# JSON 버전의 느슨한 키워드 + 약간 확장 (오탐 허용)
-FIELD_KEYWORDS = {
-    "KUM마일리지": ["kum", "kum 마일리지", "kum마일리지", "쿰마일리지", "마일리지", "점수", "스코어"],
-    "신청기간": ["신청기간", "신청 기간", "접수기간", "접수 기간", "언제까지 신청", "데드라인", "마감"],
-    "대상자": ["대상자", "대상", "누가", "몇학년", "학년", "참여대상"],
-    "진행기간": ["진행기간", "일시", "언제", "시간", "날짜", "일정", "기간"],
-    "URL": ["url", "링크", "주소", "사이트", "홈페이지", "web"],
-    "장소": ["장소", "위치", "어디서", "장소가"],
-    "수료증": ["수료증", "수료", "수료증주", "수료증 있"]
-}
-
 
 # -----------------------------
-# 유틸
+# 유틸 함수
 # -----------------------------
 def _normalize(s: str) -> str:
     s = unicodedata.normalize("NFKC", s or "").lower()
@@ -65,652 +107,467 @@ def _normalize(s: str) -> str:
     s = re.sub(r"[^\w가-힣]", "", s)
     return s
 
-def _which_field_from_query(query: str) -> str | None:
-    nq = _normalize(query or "")
-    for field, kws in FIELD_KEYWORDS.items():
-        for kw in kws:
-            if _normalize(kw) in nq:
-                return field
-    return None
-
 
 # -----------------------------
-# 임베딩 캐시
+# DB 로딩
 # -----------------------------
-CACHE_DIR = Path(os.getenv("CACHE_DIR", "app/.cache"))
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-CACHE_FILE = CACHE_DIR / "title_emb_cache.pkl"
 
-def _load_cache():
-    if CACHE_FILE.exists():
-        with open(CACHE_FILE, "rb") as f:
-            return pickle.load(f)
-    return {}
-
-def _save_cache(cache):
-    with open(CACHE_FILE, "wb") as f:
-        pickle.dump(cache, f)
-
-def get_embedding(text: str):
-    key = hashlib.md5((text + "|text-embedding-3-small").encode("utf-8")).hexdigest()
-    cache = getattr(get_embedding, "_cache", None)
-    if cache is None:
-        cache = _load_cache()
-        get_embedding._cache = cache
-    if key in cache:
-        return cache[key]
-    res = client.embeddings.create(input=[text], model="text-embedding-3-small")
-    vec = np.array(res.data[0].embedding).reshape(1, -1)
-    cache[key] = vec
-    _save_cache(cache)
-    return vec
-
-
-# -----------------------------
-# DB 로딩 & 텍스트 합성 (JSON 스키마와 유사한 텍스트로 표준화)
-# -----------------------------
-def _fmt_dt(x) -> str:
-    """
-    DB는 datetime 또는 'YYYY-MM-DD HH:MM:SS' 문자열일 수 있음.
-    합성 텍스트는 'YYYY.MM.DD HH:MM'로 통일 (JSON 텍스트와 최대한 유사)
-    """
-    if not x:
+# 날짜/시간 포맷統一 (예: "2025.10.03 13:00")
+def _fmt_dt(dt):
+    if not dt:
         return ""
+    if isinstance(dt, str):
+        return dt  # 이미 문자열이면 그대로
     try:
-        if isinstance(x, str):
-            x = x[:16]  # 'YYYY-MM-DD HH:MM'
-            dt = datetime.strptime(x, "%Y-%m-%d %H:%M")
-        else:
-            dt = x
         return dt.strftime("%Y.%m.%d %H:%M")
     except Exception:
-        return str(x)
-
-def _load_and_synthesize_text_for_extracurricular(conn):
-    """
-    extracurricular(extracurricular_id, title, url, description,
-                    activity_start/end, application_start/end, location)
-    → JSON-text와 최대한 비슷한 라인 구성으로 합성
-    """
-    q = """
-    SELECT
-      extracurricular_id,
-      title,
-      url,
-      description,
-      activity_start,
-      activity_end,
-      application_start,
-      application_end,
-      location
-    FROM extracurricular
-    """
-    rows = []
-    for r in conn.execute(sql_text(q)).mappings():
-        title = (r.get("title") or "").strip()
-        url   = (r.get("url") or "").strip()
-
-        apply_line = ""
-        if r.get("application_start") or r.get("application_end"):
-            # JSON은 종종 날짜 사이 공백 없이 ~ 연결 → 여긴 공백 최소화
-            a1 = _fmt_dt(r.get("application_start"))
-            a2 = _fmt_dt(r.get("application_end"))
-            apply_line = f"{a1}~{a2}".replace("  ", " ")
-
-        event_line = ""
-        if r.get("activity_start") or r.get("activity_end"):
-            e1 = _fmt_dt(r.get("activity_start"))
-            e2 = _fmt_dt(r.get("activity_end"))
-            # "YYYY.MM.DD HH:MM~YYYY.MM.DD HH:MM"
-            event_line = f"{e1}~{e2}".replace("  ", " ")
-
-        place = (r.get("location") or "").strip()
-        desc  = (r.get("description") or "").strip()
-
-        # JSON의 text 형식을 최대한 모사
-        text = "\n".join(filter(None, [
-            f"제목: {title}",
-            f"URL: {url}" if url else "",
-            f"신청기간: {apply_line}" if apply_line else "",
-            f"진행기간: {event_line}" if event_line else "",
-            f"장소: {place}" if place else "",
-            desc
-        ])).strip()
-
-        rows.append({"id": r["extracurricular_id"], "text": text})
-    return rows
+        return str(dt)
 
 def load_activities_from_db():
+    """
+    - is_deleted = 0 인 것만 로딩
+    - RAG/규칙 추출에 유용한 필드들을 텍스트로 정리
+    - 정규식 FIELD_PATTERNS에 맞도록 한글 라벨 고정:
+        신청기간/진행기간/장소/URL/KUM 마일리지/수료증/대상자
+    """
     with engine.connect() as conn:
-        rows = _load_and_synthesize_text_for_extracurricular(conn)
-        if rows:
-            return rows
-    raise RuntimeError("DB에서 비교과 데이터를 찾지 못했습니다. (extracurricular 테이블이 비었을 수 있음)")
+        q = """
+        SELECT
+            extracurricular_pk_id,
+            extracurricular_id,
+            title,
+            url,
+            description,
+            activity_start,
+            activity_end,
+            application_start,
+            application_end,
+            keywords,
+            location,
+            target_audience,
+            kum_mileage,
+            has_certificate,
+            selection_method,
+            purpose,
+            benefits,
+            `procedure` AS procedure_field
+        FROM extracurricular
+        WHERE COALESCE(is_deleted, 0) = 0
+        """
+        rows = []
+        for r in conn.execute(sql_text(q)).mappings():
+            # 안전한 값 꺼내기
+            title = r.get("title", "") or ""
+            url = r.get("url", "") or ""
+            location = r.get("location", "") or ""
+            description = r.get("description", "") or ""
+            target = r.get("target_audience", "") or ""
+            mileage = r.get("kum_mileage", None)
+            has_cert = r.get("has_certificate", None)  # 1/0 또는 None
+            sel_method = r.get("selection_method", "") or ""
+            purpose = r.get("purpose", "") or ""
+            benefits = r.get("benefits", "") or ""
+            procedure = r.get("procedure_field", "") or ""
+            keywords = r.get("keywords", None)  # JSON
 
+            # 날짜/시간 포맷 정리
+            app_start = _fmt_dt(r.get("application_start"))
+            app_end   = _fmt_dt(r.get("application_end"))
+            act_start = _fmt_dt(r.get("activity_start"))
+            act_end   = _fmt_dt(r.get("activity_end"))
+
+            # 수료증 표기(정규식에 맞추어 '있음|없음')
+            cert_line = None
+            if has_cert is not None:
+                cert_line = f"수료증: {'있음' if int(has_cert) == 1 else '없음'}"
+
+            # 마일리지 표기(정규식에 맞추어 “… 10점”)
+            mileage_line = None
+            if mileage is not None:
+                mileage_line = f"KUM 마일리지 {int(mileage)}점"
+
+            # 키워드(JSON) 가공(선택)
+            keywords_line = None
+            if keywords:
+                try:
+                    # keywords가 JSON 배열이라고 가정
+                    if isinstance(keywords, (list, tuple)):
+                        kw_list = keywords
+                    else:
+                        # sqlalchemy가 str로 줄 때 대비
+                        import json
+                        kw_list = json.loads(keywords)
+                    if kw_list:
+                        keywords_line = "키워드: " + ", ".join(map(str, kw_list))
+                except Exception:
+                    pass
+
+            # 규칙 기반 추출에 걸리도록 한글 라벨 고정
+            text_lines = [
+                f"제목: {title}",
+                f"URL: {url}" if url else "",
+                f"신청기간: {app_start}~{app_end}" if (app_start or app_end) else "",
+                f"진행기간: {act_start}~{act_end}" if (act_start or act_end) else "",
+                f"장소: {location}" if location else "",
+                f"대상자: {target}" if target else "",
+                mileage_line or "",
+                cert_line or "",
+                f"선정방법: {sel_method}" if sel_method else "",
+                f"목적: {purpose}" if purpose else "",
+                f"혜택: {benefits}" if benefits else "",
+                f"절차: {procedure}" if procedure else "",
+                keywords_line or "",
+                description,  # 맨 마지막에 본문 설명
+            ]
+
+            text = "\n".join([ln for ln in text_lines if ln])
+
+            rows.append({
+                # 내부 id는 이전 코드와의 호환을 위해 extracurricular_id 유지
+                "id": r["extracurricular_id"],
+                "title": title,
+                "url": url,
+                "text": text,
+                # (선택) 필요하면 추가 필드도 보관 가능:
+                # "pk": r.get("extracurricular_pk_id"),
+            })
+        return rows
 
 # -----------------------------
-# 파서/스코어링 (JSON 버전과 동일한 규칙)
+# 청크화 + 인덱싱
 # -----------------------------
-def parse_title(text: str) -> str:
-    for line in text.splitlines():
-        if line.startswith("제목:"):
-            return line.replace("제목:", "", 1).strip()
-    return "이름 없음"
+def chunk_text(text: str, chunk_size: int = 700, overlap: int = 20):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i+chunk_size])
+        if chunk:
+            chunks.append(chunk)
+    return chunks
 
-def extract_fields(text: str) -> dict:
-    out = {"제목": parse_title(text)}
-    # KUM 마일리지: 다중 매칭 → 최댓값(숫자만)
-    nums = re.findall(r"(?:KUM|쿰)\s*마일리(?:지|리지)[^\d]{0,8}(\d{1,3})", text)
-    if nums:
-        out["KUM마일리지"] = str(max(int(n) for n in nums))
-    for k, pat in FIELD_PATTERNS.items():
-        if k == "KUM마일리지":
+# Agent_Rag_Chatbot.py
+
+def initialize_indexes():
+    # 1) 인덱스/메타가 이미 있으면, DB는 로드하되 청크 임베딩 재계산/재인덱싱은 스킵
+    if FAISS_INDEX_FILE.exists() and CHUNK_META_FILE.exists():
+        _ = faiss.read_index(str(FAISS_INDEX_FILE))
+        with open(CHUNK_META_FILE, "rb") as f:
+            _ = pickle.load(f)
+
+        activities_local = load_activities_from_db()
+
+        # 제목 임베딩만 준비(아래 2단계의 '배치 임베딩' & '디스크 캐시'가 있으면 매우 빠름)
+        titles = [a["title"] for a in activities_local]
+        title_embeddings_local = get_embeddings_batch(titles)
+        return activities_local, title_embeddings_local
+
+    # 2) 없을 때만 (처음 한 번) 빌드
+    activities_local = load_activities_from_db()
+    titles = [a["title"] for a in activities_local]
+    title_embeddings_local = get_embeddings_batch(titles)
+
+    chunk_texts, chunk_meta = [], []
+    for act in activities_local:
+        for ck in chunk_text(act["text"]):
+            chunk_texts.append(ck)
+            chunk_meta.append({"id": act["id"], "title": act["title"], "url": act["url"], "chunk": ck})
+
+    if chunk_texts:
+        chunk_embs = np.vstack([get_embedding(ck) for ck in chunk_texts]).astype("float32")
+        chunk_embs /= np.linalg.norm(chunk_embs, axis=1, keepdims=True) + 1e-12
+        index = faiss.IndexFlatIP(chunk_embs.shape[1])
+        index.add(chunk_embs)
+        faiss.write_index(index, str(FAISS_INDEX_FILE))
+        with open(CHUNK_META_FILE, "wb") as f:
+            pickle.dump(chunk_meta, f)
+
+    return activities_local, title_embeddings_local
+
+def load_indexes():
+    if FAISS_INDEX_FILE.exists() and CHUNK_META_FILE.exists():
+        index = faiss.read_index(str(FAISS_INDEX_FILE))
+        with open(CHUNK_META_FILE, "rb") as f:
+            meta = pickle.load(f)
+        return index, meta
+    return None, None
+
+# -----------------------------
+# 스케줄 파싱 (날짜 포함)
+# -----------------------------
+# 요일 매핑: 0=월 ... 6=일
+_KOR_WEEKDAY = {"월":0,"화":1,"수":2,"목":3,"금":4,"토":5,"일":6}
+
+def _weekday_of(dt: datetime) -> int:
+    return dt.weekday()  # 월=0 ... 일=6
+
+def _overlap_by_weekday(schedule, slot):
+    """
+    schedule: {'start': dt, 'end': dt}
+    slot: {'day':'월','startTime':'HH:MM','endTime':'HH:MM'}
+    """
+    try:
+        w = _KOR_WEEKDAY.get(slot.get("day","").strip())
+        if w is None:
+            return False
+        # 활동이 걸치는 모든 날짜의 요일을 체크 (하루 넘김 고려)
+        start_date = schedule["start"].date()
+        end_date = schedule["end"].date()
+        days = (schedule["end"].date() - start_date).days
+        # 최소 1일 보장
+        days = max(0, days)
+        for d in range(days + 1):
+            day_dt = datetime.combine(start_date, datetime.min.time()) + timedelta(days=d)
+            if _weekday_of(day_dt) != w:
+                continue
+            # 해당 요일의 시간만 비교
+            a_start = schedule["start"].strftime("%H:%M") if d == 0 else "00:00"
+            a_end   = schedule["end"].strftime("%H:%M") if day_dt.date() == end_date else "23:59"
+            if _time_overlap_only(a_start, a_end, slot.get("startTime","00:00"), slot.get("endTime","00:00")):
+                return True
+        return False
+    except Exception:
+        return False
+
+SCHEDULE_PATTERNS = [
+    r"(\d{4}[.\-\/]\d{2}[.\-\/]\d{2})\s+(\d{2}:\d{2})\s*~\s*(\d{4}[.\-\/]\d{2}[.\-\/]\d{2})\s+(\d{2}:\d{2})"
+]
+
+def _parse_date(s: str) -> datetime.date:
+    for fmt in ("%Y.%m.%d", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
             continue
+    raise ValueError(f"지원하지 않는 날짜 형식: {s}")
+
+def _parse_datetime(date_str: str, time_str: str) -> datetime:
+    # Asia/Seoul 기준 로컬 naive datetime으로 처리
+    return datetime.combine(_parse_date(date_str), datetime.strptime(time_str, "%H:%M").time())
+
+def parse_schedule(text: str):
+    """
+    활동 텍스트에서 '시작~종료'를 날짜 포함으로 파싱.
+    반환: {'start': datetime, 'end': datetime} 또는 None
+    """
+    for pat in SCHEDULE_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            s_date, s_time, e_date, e_time = m.group(1), m.group(2), m.group(3), m.group(4)
+            start_dt = _parse_datetime(s_date, s_time)
+            end_dt = _parse_datetime(e_date, e_time)
+            return {"start": start_dt, "end": end_dt}
+    return None
+
+def _overlap_dt(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    return max(a_start, b_start) < min(a_end, b_end)
+
+def _time_overlap_only(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
+    """날짜 정보가 없을 때(역호환): 시:분만으로 겹침 판단"""
+    fmt = "%H:%M"
+    s1, e1 = datetime.strptime(a_start, fmt), datetime.strptime(a_end, fmt)
+    s2, e2 = datetime.strptime(b_start, fmt), datetime.strptime(b_end, fmt)
+    return max(s1, s2) < min(e1, e2)
+    
+
+
+# -----------------------------
+# 글로벌 상태 (후속질의 맥락)
+# -----------------------------
+activities = []
+title_embeddings = []
+recent_top5_idx_title_map = {}
+recent_top5_idx_id_map = {}   # 후속 질의에 쓸 수 있는 id
+last_queried_title = None
+
+# -----------------------------
+# 필드 추출 & 단답
+# -----------------------------
+def extract_fields(text: str) -> dict:
+    out = {}
+    for k, pat in FIELD_PATTERNS.items():
         m = re.search(pat, text)
         if m:
             out[k] = m.group(1).strip()
     return out
 
-def _weekday_kor_from_date_str(date_str: str) -> str:
-    try:
-        dt = datetime.strptime(date_str, "%Y.%m.%d")
-        return {"Mon":"월","Tue":"화","Wed":"수","Thu":"목","Fri":"금","Sat":"토","Sun":"일"}[dt.strftime("%a")]
-    except:
-        return ""
-
-def parse_schedule(text: str):
-    """
-    JSON 텍스트 포맷을 기준:
-    - "진행기간: 2025.05.27 14:00~2025.05.27 16:00"
-    - 괄호 요일이 껴도 허용
-    """
-    def _clean(s: str) -> str:
-        return re.sub(r"\([^)]+\)", "", s).strip()
-
-    for line in text.splitlines():
-        if line.startswith("진행기간:"):
-            raw = _clean(line.replace("진행기간:", "", 1).strip())
-
-            # 1) 서로 다른 날짜
-            m = re.match(
-                r"(\d{4}\.\d{1,2}\.\d{1,2})\s+(\d{1,2}:\d{2})\s*[~\-]\s*(\d{4}\.\d{1,2}\.\d{1,2})\s+(\d{1,2}:\d{2})",
-                raw
-            )
-            # 2) 같은 날짜 (두 번째 날짜 생략)
-            n = re.match(
-                r"(\d{4}\.\d{1,2}\.\d{1,2})\s+(\d{1,2}:\d{2})\s*[~\-]\s*(\d{1,2}:\d{2})",
-                raw
-            )
-            if not (m or n):
-                return None
-
-            if m:
-                start_day, start_time, end_day, end_time = m.groups()
-            else:
-                start_day, start_time, end_time = n.groups()
-                end_day = start_day
-
-            day = _weekday_kor_from_date_str(start_day)
-            return {"day": day, "startTime": start_time, "endTime": end_time}
+def _short_field_answer(query: str, fields: dict):
+    for k in FIELD_PATTERNS.keys():
+        if k in query and fields.get(k):
+            return f"{k}: {fields[k]}"
     return None
 
-def _parse_user_time_constraint(q: str):
-    """
-    '수요일 12시~5시', '수요일 12:00~17:00', '수요일 추천해줘' → {"day": "...", "start": "...", "end": "..."} or {"day": "..."}
-    """
-    day_map = {"월":"월","화":"화","수":"수","목":"목","금":"금","토":"토","일":"일"}
-    out = {}
-    for d in day_map:
-        if d in q:
-            out["day"] = d
-            break
-    # 느슨한 시각 범위
-    pat = r"(\d{1,2})\s*(?:시|:)?\s*(\d{0,2})?\s*[~\-]\s*(\d{1,2})\s*(?:시|:)?\s*(\d{0,2})?"
-    m = re.search(pat, q)
-    if m:
-        s_h = int(m.group(1)); s_m = int(m.group(2) or 0)
-        e_h = int(m.group(3)); e_m = int(m.group(4) or 0)
-        if e_h < s_h:
-            e_h += 12 if s_h <= 12 else 0
-        out["start"] = f"{s_h:02d}:{s_m:02d}"
-        out["end"]   = f"{e_h:02d}:{e_m:02d}"
-    return out or None
-
-def _time_overlap(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
-    fmt = "%H:%M"
-    s1, e1 = datetime.strptime(a_start, fmt), datetime.strptime(a_end, fmt)
-    s2, e2 = datetime.strptime(b_start, fmt), datetime.strptime(b_end, fmt)
-    return max(s1, s2) < min(e1, e2)
-
+def answer_program_question_by_title(query: str):
+    global last_queried_title
+    for act in activities:
+        if _normalize(act["title"]) in _normalize(query) or (last_queried_title and _normalize(last_queried_title) in _normalize(query)):
+            fields = extract_fields(act["text"])
+            short = _short_field_answer(query, fields)
+            if short:
+                return short
+            # fallback LLM
+            prompt = f"[활동정보]\n{act['text']}\n\n[질문]\n{query}\n\n자료에 기반해 1~2문장으로 답하세요."
+            resp = client.chat.completions.create(
+                model="gpt-3.5-turbo", temperature=0, max_tokens=150,
+                messages=[{"role":"system","content":"간단한 비교과 안내 도우미"},
+                          {"role":"user","content":prompt}]
+            )
+            return resp.choices[0].message.content.strip()
+    return "자료에 없음"
 
 # -----------------------------
-# 글로벌 상태/캐시
+# 추천 검색 (Top-5) - 시간표 필터 부분만 교체
 # -----------------------------
-load_dotenv()
-
-activities = []                 # [{"id": int, "text": str}, ...]
-title_embeddings = []           # [np.array(1,d), ...]
-recent_top5_idx_title_map = {}  # {1: "제목", ...}
-recent_top5_idx_id_map = {}     # {1: id, ...}
-last_queried_title: str | None = None
-
-def initialize_activities():
-    """DB에서 활동 로드 + 타이틀 임베딩 캐시 생성"""
-    global activities, title_embeddings
-    activities = load_activities_from_db()
-    title_embeddings = []
-    for item in activities:
-        title = parse_title(item.get("text", ""))
-        title_embeddings.append(get_embedding(title))
-
-
-# -----------------------------
-# 검색(추천): JSON 버전의 동작 & 출력 재현
-# -----------------------------
-def _schedule_ok_for_user(schedule: dict | None, user_profile: dict) -> bool:
-    if not schedule:
-        return False
-    # 유저 시간표 충돌 제외
-    for slot in (user_profile.get("timetable") or []):
-        if slot.get("day") == schedule["day"] and _time_overlap(
-            slot["startTime"], slot["endTime"], schedule["startTime"], schedule["endTime"]
-        ):
-            return False
-    return True
-
-
 def search_top5_programs_with_explanation(query: str, user_profile: dict):
-    """
-    반환: (텍스트, [id...], [structured...])
-    - 텍스트: 사용자용 설명
-    - [id...]: 숫자 ID 배열
-    - [structured...]: API 응답용 딕트 리스트
-    """
     global recent_top5_idx_title_map, recent_top5_idx_id_map, last_queried_title
 
+    # (지연 초기화) activities가 비었으면 초기화
+    global activities, title_embeddings
     if not activities or not title_embeddings:
-        initialize_activities()
+        activities, title_embeddings = initialize_indexes()
 
     query_emb = get_embedding(query)
     interest_text = " ".join(user_profile.get("interests", [])) if user_profile.get("interests") else ""
-    interest_emb = get_embedding(interest_text)
+    interest_emb = get_embedding(interest_text) if interest_text else None
 
-    # (1) KUM 마일리지 숫자 필터
     mileage_filter = None
-    m = re.search(r"(?:KUM|쿰)?\s*마일리(?:지|리지)[^\d]{0,3}(\d{1,3})", query)
-    if m:
-        mileage_filter = int(m.group(1))
+    m = re.search(r"마일리(?:지|리지)\s*(\d+)", query)
+    if m: mileage_filter = int(m.group(1))
 
     scored = []
-    for idx, item in enumerate(activities):
-        text = item.get("text", "")
-        schedule = parse_schedule(text)
-        if not _schedule_ok_for_user(schedule, user_profile):
+    for idx, act in enumerate(activities):
+        schedule = parse_schedule(act["text"])  # {'start': dt, 'end': dt} 또는 None
+
+        # --- 날짜/요일 포함 겹침 체크 ---
+        has_conflict = False
+        user_slots = user_profile.get("timetable") or []
+        if schedule:
+            for slot in user_slots:
+                try:
+                    if "start" in slot and "end" in slot:
+                        # 날짜 포함 슬롯: "YYYY-MM-DD HH:MM"
+                        def _parse_slot_dt(s):
+                            s = s.strip().replace("/", "-").replace(".", "-")
+                            return datetime.strptime(s, "%Y-%m-%d %H:%M")
+                        b_start = _parse_slot_dt(slot["start"])
+                        b_end   = _parse_slot_dt(slot["end"])
+                        if _overlap_dt(schedule["start"], schedule["end"], b_start, b_end):
+                            has_conflict = True
+                            break
+                    elif {"startDay","startTime","endDay","endTime"} <= set(slot.keys()):
+                        # 날짜/시간 분리 슬롯
+                        b_start = _parse_datetime(slot["startDay"].replace("-", ".").replace("/", "."), slot["startTime"])
+                        b_end   = _parse_datetime(slot["endDay"].replace("-", ".").replace("/", "."), slot["endTime"])
+                        if _overlap_dt(schedule["start"], schedule["end"], b_start, b_end):
+                            has_conflict = True
+                            break
+                    elif {"day","startTime","endTime"} <= set(slot.keys()):
+                        # 요일 기반 슬롯
+                        if _overlap_by_weekday(schedule, slot):
+                            has_conflict = True
+                            break
+                    else:
+                        # 날짜 없는 구형 슬롯: {'startTime':'HH:MM','endTime':'HH:MM'}
+                        if _time_overlap_only(schedule["start"].strftime("%H:%M"),
+                                              schedule["end"].strftime("%H:%M"),
+                                              slot.get("startTime","00:00"),
+                                              slot.get("endTime","00:00")):
+                            has_conflict = True
+                            break
+                except Exception:
+                    pass
+        if has_conflict:
             continue
 
-        fields = extract_fields(text)
+        # --- 마일리지 필터 ---
+        fields = extract_fields(act["text"])
+        if mileage_filter and int(fields.get("KUM마일리지","0")) != mileage_filter:
+            continue
 
-        # (2) 마일리지 숫자 필터
-        if mileage_filter is not None:
-            v = fields.get("KUM마일리지")
-            if not v or int(v) != mileage_filter:
-                continue
-
-        # (3) 유사도 점수 계산 + 낮은 항목 컷(JSON과 동일 임계)
+        # --- 스코어 ---
         title_emb = title_embeddings[idx]
         qsim = float(cosine_similarity(title_emb, query_emb)[0][0])
-        isim = float(cosine_similarity(title_emb, interest_emb)[0][0]) if interest_text else 0.0
-        if qsim < 0.30 and isim < 0.30:
-            continue
-
-        title = fields.get("제목", parse_title(text))
-        score = 0.8 * qsim + 0.2 * isim
-        scored.append((idx, item["id"], title, score, qsim, isim, fields.get("KUM마일리지")))
+        isim = float(cosine_similarity(title_emb, interest_emb)[0][0]) if interest_emb is not None else 0.0
+        score = 0.8*qsim + 0.2*isim
+        scored.append((idx, act["id"], act["title"], score))
 
     if not scored:
-        return ("조건에 맞는 프로그램을 찾지 못했습니다.", [], [])
+        return "조건에 맞는 프로그램이 없습니다.", [], []
 
     top5 = sorted(scored, key=lambda x: x[3], reverse=True)[:5]
-
-    # 숫자 선택용 맵 (제목/ID 모두 저장)
-    recent_top5_idx_title_map = {i+1: top5[i][2] for i in range(len(top5))}
-    recent_top5_idx_id_map    = {i+1: top5[i][1] for i in range(len(top5))}
-    globals()["recent_top5_idx_title_map"] = recent_top5_idx_title_map
-    globals()["recent_top5_idx_id_map"] = recent_top5_idx_id_map
-
-    # 후속 '그건...' 안정화를 위해 1등 제목 보관
+    recent_top5_idx_title_map = {i+1: t for i, (_, _, t, _) in enumerate(top5)}
+    recent_top5_idx_id_map    = {i+1: tid for i, (_, tid, _, _) in enumerate(top5)}
     last_queried_title = top5[0][2]
 
-    # (4) 출력 텍스트 + ids + structured
-    lines = []
-    ids_out = []
-    structured = []
-    for i, (_idx, _id, title, score, qsim, isim, kum) in enumerate(top5, start=1):
-        miles = f" — KUM마일리지: {kum}점" if kum else ""
-        lines.append(f"{i}. {title}{miles}\n    - 종합 점수: {score:.3f} (질문 유사도: {qsim:.3f}, 관심사 유사도: {isim:.3f})")
-        ids_out.append(_id)
-        structured.append(_build_reco_item(_id, title, score, qsim, isim, kum))
-
-    text_out = "\n\n".join(lines)
-    return (text_out, ids_out, structured)
-
+    ids_out = [tid for _, tid, _, _ in top5]
+    structured = [{"extracurricular_id": tid, "title": t} for _, tid, t, _ in top5]
+    text_out = "\n".join([f"{i+1}. {t}" for i, (_, _, t, _) in enumerate(top5)])
+    return text_out, ids_out, structured
 
 # -----------------------------
-# 필드 단답 & 자유 요약 (JSON 버전과 동일 논리)
+# 청크 기반 RAG 검색
 # -----------------------------
-def _short_field_answer(query: str, fields: dict) -> str | None:
-    field = _which_field_from_query(query)
-    if not field:
-        return None
-    val = fields.get(field)
+def search_chunks(query: str, topk=5):
+    index, meta = load_indexes()
+    if not index: return []
+    q_emb = get_embedding(query).astype("float32")
+    q_emb /= np.linalg.norm(q_emb, axis=1, keepdims=True) + 1e-12  # 쿼리도 정규화
+    D, I = index.search(q_emb, topk)  # IP 점수 = 코사인 유사도와 단조 일치
+    return [meta[i] for i in I[0] if i < len(meta)]
 
-    # JSON 평가 포맷: "KUM마일리지: 20" (점 제거)
-    if field == "KUM마일리지" and val:
-        m = re.search(r"\d+", val)
-        val = m.group(0) if m else val
+def build_context(chunks): 
+    return "\n\n".join(c["chunk"] for c in chunks)[:2000]
 
-    return f"{field}: {val if val else '자료에 없음'}"
-
-def answer_program_question_by_title(query: str) -> str:
-    """
-    제목 포함/유사도 기반으로 1개 선택 → 필드 단답 우선, 아니면 간단 요약
-    (JSON 버전의 임계/맥락 fallback 유지)
-    """
-    global last_queried_title
-
-    if not activities or not title_embeddings:
-        initialize_activities()
-
-    # (A) 정확 제목 포함 매칭
-    best_idx = -1
-    for i, item in enumerate(activities):
-        title_i = parse_title(item.get("text", ""))
-        if title_i and title_i in query:
-            best_idx = i
-            break
-
-    # (B) 임베딩 유사도
-    if best_idx == -1:
-        q_emb = get_embedding(query)
-        best_score = -1.0
-        for idx, title_emb in enumerate(title_embeddings):
-            sim = float(cosine_similarity(title_emb, q_emb)[0][0])
-            if sim > best_score:
-                best_score, best_idx = sim, idx
-        if best_score < 0.55:
-            # 최근 맥락 + 필드질문 → 최근 항목으로 단답 시도
-            if last_queried_title and _which_field_from_query(query):
-                for it in activities:
-                    if last_queried_title in it.get("text", ""):
-                        fields = extract_fields(it.get("text", ""))
-                        ans = _short_field_answer(query, fields)
-                        if ans:
-                            return ans
-            return "입력하신 질문에서 어떤 프로그램을 지칭하는지 찾을 수 없습니다."
-
-    item = activities[best_idx]
-    text = item.get("text", "")
-    fields = extract_fields(text)
-    last_queried_title = fields.get("제목", parse_title(text))
-
-    # (C) 필드 단답 우선
-    short = _short_field_answer(query, fields)
-    if short:
-        return short
-
-    # (D) 간단 요약 (자료에만 근거)
-    brief_text = text[:1500]
-    prompt = (
-        f"[활동정보]\n{brief_text}\n\n"
-        f"[질문]\n{query}\n\n"
-        "자료에 있는 내용만 근거로 한국어로 1~2문장으로 간단히 답하세요. "
-        "자료에 없으면 '자료에 없음'이라고 답하세요."
+def generate_answer(query, context, sources):
+    prompt = f"질문: {query}\n\n참고자료:\n{context}\n\n위 자료만 근거로 답하세요."
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo", temperature=0,
+        messages=[{"role":"system","content":"비교과 챗봇"},{"role":"user","content":prompt}]
     )
-    response = client.chat.completions.create(
-        model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-        temperature=0.0,
-        max_tokens=160,
-        messages=[
-            {"role": "system", "content": "간결하고 정확한 비교과 안내 도우미."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content.strip()
-
+    ans = resp.choices[0].message.content.strip()
+    return {"answer": ans, "sources": [{"id": s["id"], "title": s["title"], "url": s["url"]} for s in sources]}
 
 # -----------------------------
-# 후속질의 치환 & 의도 분류 (JSON UX 충실)
+# 평가 스크립트
 # -----------------------------
-def resolve_followup_question(user_question: str) -> str:
-    """
-    '2번 URL', '2', '2: URL', '그건 …' → '〈제목〉 …' 치환
-    - 앞머리 자모/부호 제거 허용 ('ㄱ그건', 'ㅋㅋ 2번 URL')
-    """
-    global recent_top5_idx_title_map, last_queried_title
-
-    s = user_question.strip()
-    s_clean = re.sub(r"^[ㄱ-ㅎㅏ-ㅣ\W_]+", "", s)
-
-    # 숫자만/숫자+번/숫자:tail 모두 지원
-    m = re.match(r"^\s*(\d+)\s*(?:번|\.|:)?\s*(.*)$", s_clean)
-    if m:
-        num = int(m.group(1)); tail = (m.group(2) or "").strip()
-        if num in recent_top5_idx_title_map:
-            title = recent_top5_idx_title_map[num]
-            last_queried_title = title
-            return f"{title} {tail}".strip()
-
-    if s_clean.startswith("그건"):
-        tail = s_clean[2:].strip()
-        if last_queried_title and tail:
-            return f"{last_queried_title} {tail}".strip()
-
-    return user_question
-
-def _classify_intent(original_q: str) -> str:
-    """
-    - (우선) 숫자 시작('1', '1번') 또는 '그건 …' 또는 필드 키워드 → 'field'
-    - 그 외에 '추천/어울리/비교과/프로그램/특강/AI/창업/캡스톤…' 포함 → 'reco'
-    - 기본 → 'reco'
-    (숫자만을 필드로 처리하는 점이 JSON UX 핵심)
-    """
-    q = original_q or ""
-    nq = _normalize(q)
-    head = re.sub(r"^[ㄱ-ㅎㅏ-ㅣ\W_]+", "", q.strip())
-
-    if re.search(r"^\s*\d+\s*(?:번)?\s*(?:$|\S)", head) or head.startswith("그건") or _which_field_from_query(q):
-        return "field"
-
-    reco_trigs = ["추천", "어울리", "비교과", "프로그램", "활동", "컨설팅", "워크숍", "특강",
-                  "ai", "인공지능", "데이터", "취업", "창업", "캡스톤", "디자인"]
-    if any(_normalize(t) in nq for t in reco_trigs):
-        return "reco"
-    return "reco"
-
-
-def _build_reco_item(_id: int, title: str, score: float, qsim: float, isim: float, kum: str | None):
-    """API 응답용 추천 아이템 포맷"""
-    # KUM 마일리지는 숫자만 (없으면 None)
-    kum_num = int(re.search(r"\d+", kum).group(0)) if isinstance(kum, str) and re.search(r"\d+", kum) else None
+def evaluate(golden, user_profile):
+    hits, mrr, ndcg, recall1, total = 0,0,0,0,0
+    for g in golden:
+        q, expected = g["query"], g["expected_title"]
+        _, _, recos = search_top5_programs_with_explanation(q, user_profile)
+        titles = [r["title"] for r in recos]
+        total += 1
+        if expected in titles: hits += 1
+        if expected in titles[:1]: recall1 += 1
+        if expected in titles:
+            rank = titles.index(expected)+1
+            mrr += 1.0/rank
+            ndcg += 1.0/np.log2(rank+1)
     return {
-        "extracurricular_id": int(_id),
-        "title": title,
-        "score": float(score),
-        "question_similarity": float(qsim),
-        "interest_similarity": float(isim),
-        "kum_mileage": kum_num,
+        "hit@5": hits/total, "MRR@5": mrr/total,
+        "nDCG@5": ndcg/total, "Recall@1": recall1/total
     }
 
 # -----------------------------
-# LangChain Tool 래핑 (JSON 스타일)
+# FastAPI 연동용 Wrapper
 # -----------------------------
-def _tool_search_wrapper(user_profile):
-    def _run(query: str):
-        txt, ids = search_top5_programs_with_explanation(query, user_profile)
-        return json.dumps({"text": txt, "ids": ids}, ensure_ascii=False)
-    return _run
+def initialize_activities():
+    global activities, title_embeddings
+    activities, title_embeddings = initialize_indexes()
 
-def _tool_field_answer(query: str):
-    return answer_program_question_by_title(query)
+def api_run(user_profile: dict, user_question: str):
+    # 필드 기반 질문이면 우선 처리
+    field_answer = answer_program_question_by_title(user_question)
+    if field_answer != "자료에 없음":
+        return {"answer": field_answer, "sources": []}
 
-def make_agent(user_profile):
-    tools = [
-        Tool(
-            name="search_program",
-            func=_tool_search_wrapper(user_profile),
-            description="관심사/시간표/사용자 요청에 맞는 비교과 프로그램 Top5를 추천(검색)한다. 결과는 JSON({text, ids})."
-        ),
-        Tool(
-            name="ask_program_by_title",
-            func=_tool_field_answer,
-            description="특정 프로그램에 대해 '신청기간/진행기간/대상자/URL/장소/수료증/KUM마일리지' 등 필드 질문을 받으면 단답 또는 짧은 요약으로 답한다."
-        )
-    ]
-    return initialize_agent(
-        tools=tools,
-        llm=llm,
-        agent=AgentType.OPENAI_FUNCTIONS,
-        verbose=False,
-        max_iterations=1,  # JSON 버전과 동일하게 왕복 1회
-        early_stopping_method="generate",
-        handle_parsing_errors=True
-    )
+    # 추천 Top-5
+    reco_text, _, reco_structured = search_top5_programs_with_explanation(user_question, user_profile)
+    if reco_structured:
+        return {"answer": reco_text, "sources": reco_structured}
 
-
-# -----------------------------
-# 최상위 진입점 (JSON 라우팅 유지)
-# -----------------------------
-def run_query(user_profile: dict, user_question: str):
-    """
-    외부에서 호출하는 단일 엔트리.
-    - 추천 intent: (텍스트, [id...])
-    - 필드/요약 intent: (텍스트, [])
-    """
-    if not activities or not title_embeddings:
-        initialize_activities()
-
-    q = resolve_followup_question(user_question)
-    intent = _classify_intent(user_question)
-
-    if intent == "field":
-        return (answer_program_question_by_title(q), [])
-
-    txt, ids, _structured = search_top5_programs_with_explanation(q, user_profile)
-    return (txt, ids)
-
-
-def api_run(user_profile: dict, user_question: str) -> dict:
-    """
-    FastAPI가 그대로 JSON 직렬화해 내보낼 수 있는 응답.
-    {
-      "answer": "...텍스트...",
-      "recommendations": [{extracurricular_id, title, score, question_similarity, interest_similarity, kum_mileage}, ...],
-      "recommended_ids": [ ... ]
-    }
-    """
-    if not activities or not title_embeddings:
-        initialize_activities()
-
-    q = resolve_followup_question(user_question)
-    intent = _classify_intent(user_question)
-
-    # 필드 질문이면 추천 리스트는 비우고 answer만
-    if intent == "field":
-        ans = answer_program_question_by_title(q)
-        return {
-            "answer": ans,
-            "recommendations": [],
-            "recommended_ids": []
-        }
-
-    text, ids, structured = search_top5_programs_with_explanation(q, user_profile)
-    return {
-        "answer": text,
-        "recommendations": structured,
-        "recommended_ids": ids
-    }
-
-
-# -----------------------------
-# CLI 테스트
-# -----------------------------
-if __name__ == "__main__":
-    load_dotenv()
-    initialize_activities()
-    user_id = input("사용자 ID를 입력하세요: ").strip()
-    user_profile = load_user_profile(user_id)
-    if not user_profile:
-        print("사용자 정보를 찾을 수 없습니다.")
-        exit()
-
-    agent = make_agent(user_profile)
-
-    while True:
-        question = input("\n궁금한 내용을 입력하세요 ('종료' 입력 시 종료): ").strip()
-        if question == "종료":
-            break
-        # JSON UX처럼: agent로 래핑하되, 내부 라우팅은 run_query 사용
-        # (툴만 쓸 수도 있지만, 여기선 run_query로 바로)
-        text, ids = run_query(user_profile, question)
-        print("\n답변:\n", text)
-        if ids:
-            print("\n[추천된 extracurricular_id]:", ids)
-
-
-# ---------------------------------------
-# (평가/디버깅용) 상위 k개 구조화 반환 (JSON 버전과 동일)
-# ---------------------------------------
-def ranked_programs(query: str, user_profile: dict, k: int = 5):
-    if not activities or not title_embeddings:
-        initialize_activities()
-
-    query_emb = get_embedding(query)
-    interest_text = " ".join(user_profile.get("interests", [])) if user_profile.get("interests") else ""
-    interest_emb = get_embedding(interest_text)
-
-    m = re.search(r"(?:KUM|쿰)?\s*마일리(?:지|리지)[^\d]{0,3}(\d{1,3})", query)
-    mileage_filter = int(m.group(1)) if m else None
-
-    rows = []
-    for idx, item in enumerate(activities):
-        text = item.get("text", "")
-        schedule = parse_schedule(text)
-        if not schedule:
-            continue
-        # 유저 시간표 충돌 제외
-        conflict = False
-        for slot in (user_profile.get("timetable") or []):
-            if slot.get("day") == schedule["day"] and _time_overlap(
-                slot["startTime"], slot["endTime"], schedule["startTime"], schedule["endTime"]
-            ):
-                conflict = True
-                break
-        if conflict:
-            continue
-
-        fields = extract_fields(text)
-        if mileage_filter is not None:
-            v = fields.get("KUM마일리지")
-            if not v or int(v) != mileage_filter:
-                continue
-
-        title_emb = title_embeddings[idx]
-        qsim = float(cosine_similarity(title_emb, query_emb)[0][0])
-        isim = float(cosine_similarity(title_emb, interest_emb)[0][0]) if interest_text else 0.0
-        if qsim < 0.30 and isim < 0.30:
-            continue
-
-        title = fields.get("제목", parse_title(text))
-        score = 0.8 * qsim + 0.2 * isim
-        rows.append({
-            "idx": idx,
-            "id": item["id"],
-            "title": title,
-            "score": float(score),
-            "query_sim": float(qsim),
-            "interest_sim": float(isim),
-            "fields": fields,
-        })
-
-    rows.sort(key=lambda r: r["score"], reverse=True)
-    return rows[:k]
+    # RAG 검색
+    chunks = search_chunks(user_question, topk=5)
+    if not chunks:
+        return {"answer": "조건에 맞는 자료를 찾을 수 없습니다.", "sources": []}
+    context = build_context(chunks)
+    return generate_answer(user_question, context, chunks)
