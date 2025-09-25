@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.models.user import UserProfile, ChatRequest
-from app.services.user_service import save_user_profile, load_user_profile
+from app.services.user_service import save_user_profile, load_user_profile, load_all_users
 from app.chatbot.Agent_Rag_Chatbot import api_run, initialize_activities, activities
 #from app.chatbot.Agent_Rag_Chatbot import run_query, initialize_activities, activities
 from app.services.report_service import generate_reports_for_users
@@ -48,6 +48,26 @@ async def register_user(profile: UserProfile):
             }
         )
 
+@app.get("/users", response_model=BaseResponse,
+    summary="전체 사용자 조회",
+    description="등록된 모든 사용자 정보를 조회합니다.",
+    tags=["사용자 정보"],
+    responses={
+        500: {"model": BaseResponse, "description": ErrorCode.INTERNAL_SERVER_ERROR.message}
+    })
+async def get_all_users():
+    try:
+        users_data = load_all_users()
+        return response(
+            message=Message.USER_QUERY_SUCCESS,
+            data={
+                "users": users_data,
+                "count": len(users_data)
+            }
+        )
+    except Exception as e:
+        raise AppException(ErrorCode.INTERNAL_SERVER_ERROR)
+
 
 @app.post("/chat", response_model=BaseResponse,
     summary="챗봇과 대화 요청",
@@ -77,9 +97,6 @@ async def chat_with_bot(request: ChatRequest):
     # DB의 경우 아래 실행
     result = api_run(user_profile, user_question)
     
-    
-
-
     return response(
         message=Message.CHAT_RESPONSE_SUCCESS,
         # JSON의 경우 아래
@@ -143,5 +160,11 @@ async def create_report(request: ReportRequest):
     if failed:
         raise AppException(ErrorCode.REPORT_GENERATION_FAILED)
 
-    return BaseResponse(success=True, code = 200, message=msg, failed=failed)
+    return response(
+        message=Message.CHAT_RESPONSE_SUCCESS,
+        data={
+            "detail": msg,
+            "failed": failed
+        }
+    )
 
