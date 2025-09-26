@@ -107,6 +107,15 @@ def _normalize(s: str) -> str:
     s = re.sub(r"[^\w가-힣]", "", s)
     return s
 
+def _normalize_sources(srcs):
+    out = []
+    for s in srcs or []:
+        out.append({
+            "id": s.get("id") or s.get("extracurricular_id"),
+            "title": s.get("title", ""),
+            "url": s.get("url", "")
+        })
+    return out
 
 # -----------------------------
 # DB 로딩
@@ -499,7 +508,14 @@ def search_top5_programs_with_explanation(query: str, user_profile: dict):
     last_queried_title = top5[0][2]
 
     ids_out = [tid for _, tid, _, _ in top5]
-    structured = [{"extracurricular_id": tid, "title": t} for _, tid, t, _ in top5]
+    structured = []
+    for idx, tid, t, _ in top5:
+        act = activities[idx]
+        structured.append({
+            "id": tid,
+            "title": t,
+            "url": act.get("url", "")
+        })
     text_out = "\n".join([f"{i+1}. {t}" for i, (_, _, t, _) in enumerate(top5)])
     return text_out, ids_out, structured
 
@@ -563,11 +579,14 @@ def api_run(user_profile: dict, user_question: str):
     # 추천 Top-5
     reco_text, _, reco_structured = search_top5_programs_with_explanation(user_question, user_profile)
     if reco_structured:
-        return {"answer": reco_text, "sources": reco_structured}
+        return {"answer": reco_text, "sources": _normalize_sources(reco_structured)}
 
     # RAG 검색
     chunks = search_chunks(user_question, topk=5)
     if not chunks:
         return {"answer": "조건에 맞는 자료를 찾을 수 없습니다.", "sources": []}
     context = build_context(chunks)
-    return generate_answer(user_question, context, chunks)
+    
+    rag = generate_answer(user_question, context, chunks)   
+    rag["sources"] = _normalize_sources(rag.get("sources")) 
+    return rag
