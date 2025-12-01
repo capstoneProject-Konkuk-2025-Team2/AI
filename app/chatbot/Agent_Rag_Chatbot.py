@@ -177,7 +177,7 @@ def load_activities_from_db():
             purpose = r.get("purpose", "") or ""
             benefits = r.get("benefits", "") or ""
             procedure = r.get("procedure_field", "") or ""
-            keywords = r.get("keywords", None)  # JSON
+            keywords_raw = r.get("keywords", None)  # JSON
 
             # 날짜/시간 포맷 정리
             app_start = _fmt_dt(r.get("application_start"))
@@ -197,19 +197,21 @@ def load_activities_from_db():
 
             # 키워드(JSON) 가공(선택)
             keywords_line = None
-            if keywords:
+            keywords_for_storage = keywords_raw
+            if keywords_raw:
                 try:
                     # keywords가 JSON 배열이라고 가정
-                    if isinstance(keywords, (list, tuple)):
-                        kw_list = keywords
+                    if isinstance(keywords_raw, (list, tuple)):
+                        kw_list = keywords_raw
                     else:
                         # sqlalchemy가 str로 줄 때 대비
                         import json
-                        kw_list = json.loads(keywords)
+                        kw_list = json.loads(keywords_raw)
                     if kw_list:
                         keywords_line = "키워드: " + ", ".join(map(str, kw_list))
+                        keywords_for_storage = kw_list
                 except Exception:
-                    pass
+                    keywords_line = str(keywords_raw)
 
             # 규칙 기반 추출에 걸리도록 한글 라벨 고정
             text_lines = [
@@ -237,8 +239,10 @@ def load_activities_from_db():
                 "title": title,
                 "url": url,
                 "text": text,
-                # (선택) 필요하면 추가 필드도 보관 가능:
-                # "pk": r.get("extracurricular_pk_id"),
+                # [CHANGED STEP1] 관심사 매칭 강화를 위해 추가 필드 저장
+                "description": description,
+                "keywords": keywords_for_storage,
+                "purpose": purpose,
             })
         return rows
 
@@ -256,6 +260,23 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 20):
 
 # Agent_Rag_Chatbot.py
 
+# [CHANGED STEP1] 프로그램 텍스트 구성 헬퍼
+def build_program_text(activity: dict) -> str:
+    parts = []
+    if activity.get("title"):
+        parts.append(activity["title"])
+    if activity.get("description"):
+        parts.append(activity["description"])
+    kw = activity.get("keywords")
+    if kw:
+        if isinstance(kw, (list, tuple, set)):
+            parts.append(" ".join(map(str, kw)))
+        else:
+            parts.append(str(kw))
+    if activity.get("purpose"):
+        parts.append(activity["purpose"])
+    return " ".join(parts)
+
 def initialize_indexes():
     # 1) 인덱스/메타가 이미 있으면, DB는 로드하되 청크 임베딩 재계산/재인덱싱은 스킵
     if FAISS_INDEX_FILE.exists() and CHUNK_META_FILE.exists():
@@ -265,15 +286,15 @@ def initialize_indexes():
 
         activities_local = load_activities_from_db()
 
-        # 제목 임베딩만 준비(아래 2단계의 '배치 임베딩' & '디스크 캐시'가 있으면 매우 빠름)
-        titles = [a["title"] for a in activities_local]
-        title_embeddings_local = get_embeddings_batch(titles)
-        return activities_local, title_embeddings_local
+        # [CHANGED STEP1] 확장된 프로그램 텍스트 기반 임베딩
+        prog_texts = [build_program_text(a) for a in activities_local]
+        program_embeddings_local = get_embeddings_batch(prog_texts)
+        return activities_local, program_embeddings_local
 
     # 2) 없을 때만 (처음 한 번) 빌드
     activities_local = load_activities_from_db()
-    titles = [a["title"] for a in activities_local]
-    title_embeddings_local = get_embeddings_batch(titles)
+    prog_texts = [build_program_text(a) for a in activities_local]
+    program_embeddings_local = get_embeddings_batch(prog_texts)
 
     chunk_texts, chunk_meta = [], []
     for act in activities_local:
@@ -290,7 +311,7 @@ def initialize_indexes():
         with open(CHUNK_META_FILE, "wb") as f:
             pickle.dump(chunk_meta, f)
 
-    return activities_local, title_embeddings_local
+    return activities_local, program_embeddings_local
 
 def load_indexes():
     if FAISS_INDEX_FILE.exists() and CHUNK_META_FILE.exists():
@@ -383,7 +404,7 @@ def _time_overlap_only(a_start: str, a_end: str, b_start: str, b_end: str) -> bo
 # 글로벌 상태 (후속질의 맥락)
 # -----------------------------
 activities = []
-title_embeddings = []
+program_embeddings = []  # [CHANGED STEP1] 확장 텍스트 임베딩 캐시
 recent_top5_idx_title_map = {}
 recent_top5_idx_id_map = {}   # 후속 질의에 쓸 수 있는 id
 last_queried_title = None
@@ -426,23 +447,71 @@ def answer_program_question_by_title(query: str):
 # -----------------------------
 # 추천 검색 (Top-5) - 시간표 필터 부분만 교체
 # -----------------------------
+def _convert_candidates_to_output(candidates, topk=5):
+    if not candidates:
+        return "", [], []
+    ordered = sorted(candidates, key=lambda x: x[3], reverse=True)[:topk]
+    text_out = "\n".join([f"{i+1}. {t}" for i, (_, _, t, _) in enumerate(ordered)])
+    ids_out = [tid for _, tid, _, _ in ordered]
+    structured = []
+    for idx, tid, title, _ in ordered:
+        act = activities[idx]
+        structured.append({
+            "id": tid,
+            "title": title,
+            "url": act.get("url", "")
+        })
+    return text_out, ids_out, structured
+
+def _summarize_timetable_slots(slots):
+    if not slots:
+        return "없음"
+    formatted = []
+    for slot in slots:
+        if {"day","startTime","endTime"} <= set(slot.keys()):
+            formatted.append(f"{slot['day']} {slot['startTime']}~{slot['endTime']}")
+        elif {"start","end"} <= set(slot.keys()):
+            formatted.append(f"{slot['start']}~{slot['end']}")
+        elif {"startDay","startTime","endDay","endTime"} <= set(slot.keys()):
+            formatted.append(f"{slot['startDay']} {slot['startTime']}~{slot['endDay']} {slot['endTime']}")
+        elif slot.get("startTime") and slot.get("endTime"):
+            formatted.append(f"{slot['startTime']}~{slot['endTime']}")
+    return ", ".join(formatted) if formatted else "없음"
+
+def _build_profile_hint(user_profile):
+    interests = ", ".join(user_profile.get("interests", [])) if user_profile.get("interests") else "없음"
+    busy = _summarize_timetable_slots(user_profile.get("timetable") or [])
+    lines = [f"관심사: {interests}"]
+    if busy != "없음":
+        lines.append(f"제약 시간대: {busy}")
+    return "\n".join(lines)
+
 def search_top5_programs_with_explanation(query: str, user_profile: dict):
     global recent_top5_idx_title_map, recent_top5_idx_id_map, last_queried_title
 
     # (지연 초기화) activities가 비었으면 초기화
-    global activities, title_embeddings
-    if not activities or not title_embeddings:
-        activities, title_embeddings = initialize_indexes()
+    global activities, program_embeddings
+    if not activities or not program_embeddings:
+        activities, program_embeddings = initialize_indexes()
 
-    query_emb = get_embedding(query)
     interest_text = " ".join(user_profile.get("interests", [])) if user_profile.get("interests") else ""
+    query_for_emb = query
+    if interest_text:
+        query_for_emb = f"{query.strip()} 관심사: {interest_text}"
+    query_emb = get_embedding(query_for_emb)
     interest_emb = get_embedding(interest_text) if interest_text else None
 
     mileage_filter = None
     m = re.search(r"마일리(?:지|리지)\s*(\d+)", query)
     if m: mileage_filter = int(m.group(1))
 
+    alpha, beta = 0.8, 0.2
+    generic_queries = {"비교과 추천해줘", "비교과 추천", "비교과 뭐 있어?", "비교과 활동 추천해줘"}
+    if query.strip() in generic_queries:
+        alpha, beta = 0.5, 0.5
+
     scored = []
+    scored_all = []
     for idx, act in enumerate(activities):
         schedule = parse_schedule(act["text"])  # {'start': dt, 'end': dt} 또는 None
 
@@ -484,40 +553,30 @@ def search_top5_programs_with_explanation(query: str, user_profile: dict):
                             break
                 except Exception:
                     pass
-        if has_conflict:
-            continue
-
         # --- 마일리지 필터 ---
         fields = extract_fields(act["text"])
         if mileage_filter and int(fields.get("KUM마일리지","0")) != mileage_filter:
             continue
 
         # --- 스코어 ---
-        title_emb = title_embeddings[idx]
-        qsim = float(cosine_similarity(title_emb, query_emb)[0][0])
-        isim = float(cosine_similarity(title_emb, interest_emb)[0][0]) if interest_emb is not None else 0.0
-        score = 0.8*qsim + 0.2*isim
-        scored.append((idx, act["id"], act["title"], score))
+        prog_emb = program_embeddings[idx]
+        qsim = float(cosine_similarity(prog_emb, query_emb)[0][0])
+        isim = float(cosine_similarity(prog_emb, interest_emb)[0][0]) if interest_emb is not None else 0.0
+        score = alpha*qsim + beta*isim
+        candidate = (idx, act["id"], act["title"], score)
+        scored_all.append(candidate)
+        if not has_conflict:
+            scored.append(candidate)
 
-    if not scored:
-        return "조건에 맞는 프로그램이 없습니다.", [], []
+    reco_text, ids_out, structured = _convert_candidates_to_output(scored)
+    fallback_text, _, fallback_structured = _convert_candidates_to_output(scored_all)
 
-    top5 = sorted(scored, key=lambda x: x[3], reverse=True)[:5]
-    recent_top5_idx_title_map = {i+1: t for i, (_, _, t, _) in enumerate(top5)}
-    recent_top5_idx_id_map    = {i+1: tid for i, (_, tid, _, _) in enumerate(top5)}
-    last_queried_title = top5[0][2]
+    if structured:
+        recent_top5_idx_title_map = {i+1: item["title"] for i, item in enumerate(structured)}
+        recent_top5_idx_id_map    = {i+1: item["id"] for i, item in enumerate(structured)}
+        last_queried_title = structured[0]["title"]
 
-    ids_out = [tid for _, tid, _, _ in top5]
-    structured = []
-    for idx, tid, t, _ in top5:
-        act = activities[idx]
-        structured.append({
-            "id": tid,
-            "title": t,
-            "url": act.get("url", "")
-        })
-    text_out = "\n".join([f"{i+1}. {t}" for i, (_, _, t, _) in enumerate(top5)])
-    return text_out, ids_out, structured
+    return reco_text, ids_out, structured, fallback_structured, fallback_text
 
 # -----------------------------
 # 청크 기반 RAG 검색
@@ -549,7 +608,7 @@ def evaluate(golden, user_profile):
     hits, mrr, ndcg, recall1, total = 0,0,0,0,0
     for g in golden:
         q, expected = g["query"], g["expected_title"]
-        _, _, recos = search_top5_programs_with_explanation(q, user_profile)
+        _, _, recos, _, _ = search_top5_programs_with_explanation(q, user_profile)
         titles = [r["title"] for r in recos]
         total += 1
         if expected in titles: hits += 1
@@ -567,8 +626,8 @@ def evaluate(golden, user_profile):
 # FastAPI 연동용 Wrapper
 # -----------------------------
 def initialize_activities():
-    global activities, title_embeddings
-    activities, title_embeddings = initialize_indexes()
+    global activities, program_embeddings
+    activities, program_embeddings = initialize_indexes()
 
 def api_run(user_profile: dict, user_question: str):
     # 필드 기반 질문이면 우선 처리
@@ -577,9 +636,22 @@ def api_run(user_profile: dict, user_question: str):
         return {"answer": field_answer, "sources": []}
 
     # 추천 Top-5
-    reco_text, _, reco_structured = search_top5_programs_with_explanation(user_question, user_profile)
+    reco_text, _, reco_structured, fallback_structured, fallback_text = search_top5_programs_with_explanation(user_question, user_profile)
     if reco_structured:
         return {"answer": reco_text, "sources": _normalize_sources(reco_structured)}
+    
+    if fallback_structured:
+        interests_desc = ", ".join(user_profile.get("interests", [])) if user_profile.get("interests") else "없음"
+        busy_desc = _summarize_timetable_slots(user_profile.get("timetable") or [])
+        notice_lines = [
+            "사용자 시간표와 겹치지 않는 비교과는 찾지 못했습니다.",
+            f"관심사: {interests_desc}"
+        ]
+        if busy_desc != "없음":
+            notice_lines.append(f"등록된 바쁜 시간: {busy_desc}")
+        notice_lines.append("아래 프로그램은 시간표 충돌이 있지만 관심사에 가까운 참고용 추천입니다.")
+        fallback_answer = "\n".join(notice_lines) + "\n\n" + fallback_text
+        return {"answer": fallback_answer, "sources": _normalize_sources(fallback_structured)}
 
     # RAG 검색
     chunks = search_chunks(user_question, topk=5)
@@ -587,6 +659,8 @@ def api_run(user_profile: dict, user_question: str):
         return {"answer": "조건에 맞는 자료를 찾을 수 없습니다.", "sources": []}
     context = build_context(chunks)
     
-    rag = generate_answer(user_question, context, chunks)   
+    profile_hint = _build_profile_hint(user_profile)
+    enriched_question = f"{user_question}\n\n[사용자 프로필]\n{profile_hint}" if profile_hint else user_question
+    rag = generate_answer(enriched_question, context, chunks)   
     rag["sources"] = _normalize_sources(rag.get("sources")) 
     return rag
