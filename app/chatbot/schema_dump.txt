@@ -1,0 +1,6 @@
+== DUMP START (2025-11-05T11:04:47) ==
+HOST=capstone-database.ch80usqgekm2.ap-northeast-2.rds.amazonaws.com PORT=3306 DBNAME=capstone
+
+[DB 연결/쿼리 오류] (pymysql.err.OperationalError) (1045, "Access denied for user 'jo-eun-yeong'@'175.193.122.35' (using password: YES)")
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+== DUMP END (2025-11-05T11:04:47) ==

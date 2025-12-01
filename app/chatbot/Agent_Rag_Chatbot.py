@@ -121,6 +121,12 @@ def _normalize_sources(srcs):
 # DB 로딩
 # -----------------------------
 
+SCHEDULE_RELIABLE_DAY_THRESHOLD = 3  # 3일 이상인 경우 시간표 충돌 판단에서 사용하지 않음
+SCHEDULE_EXCLUDE_KEYWORDS = ("신청기간", "접수기간", "모집기간", "모집일", "접수일")
+SCHEDULE_PREFERRED_KEYWORDS = (
+    "행사", "운영", "교육", "활동", "진행", "특강", "워크숍", "설명회", "프로그램 일정"
+)
+
 # 날짜/시간 포맷統一 (예: "2025.10.03 13:00")
 def _fmt_dt(dt):
     if not dt:
@@ -243,6 +249,8 @@ def load_activities_from_db():
                 "description": description,
                 "keywords": keywords_for_storage,
                 "purpose": purpose,
+                "act_start_dt": r.get("activity_start"),
+                "act_end_dt": r.get("activity_end"),
             })
         return rows
 
@@ -332,26 +340,34 @@ def _weekday_of(dt: datetime) -> int:
 
 def _overlap_by_weekday(schedule, slot):
     """
-    schedule: {'start': dt, 'end': dt}
+    schedule: {'start': dt, 'end': dt, 'reliable': bool}
     slot: {'day':'월','startTime':'HH:MM','endTime':'HH:MM'}
     """
+    if not schedule:
+        return False
+    if not schedule.get("reliable", True):
+        return False
     try:
-        w = _KOR_WEEKDAY.get(slot.get("day","").strip())
+        w = _KOR_WEEKDAY.get((slot.get("day") or "").strip())
         if w is None:
             return False
-        # 활동이 걸치는 모든 날짜의 요일을 체크 (하루 넘김 고려)
         start_date = schedule["start"].date()
         end_date = schedule["end"].date()
-        days = (schedule["end"].date() - start_date).days
-        # 최소 1일 보장
-        days = max(0, days)
-        for d in range(days + 1):
-            day_dt = datetime.combine(start_date, datetime.min.time()) + timedelta(days=d)
-            if _weekday_of(day_dt) != w:
+        duration_days = (end_date - start_date).days
+        if duration_days >= SCHEDULE_RELIABLE_DAY_THRESHOLD:
+            return False
+        for d in range(duration_days + 1):
+            day_dt = start_date + timedelta(days=d)
+            if day_dt.weekday() != w:
                 continue
-            # 해당 요일의 시간만 비교
-            a_start = schedule["start"].strftime("%H:%M") if d == 0 else "00:00"
-            a_end   = schedule["end"].strftime("%H:%M") if day_dt.date() == end_date else "23:59"
+            if d == 0:
+                a_start = schedule["start"].strftime("%H:%M")
+                a_end = "23:59" if duration_days > 0 else schedule["end"].strftime("%H:%M")
+            elif d == duration_days:
+                a_start = "00:00"
+                a_end = schedule["end"].strftime("%H:%M")
+            else:
+                a_start, a_end = "00:00", "23:59"
             if _time_overlap_only(a_start, a_end, slot.get("startTime","00:00"), slot.get("endTime","00:00")):
                 return True
         return False
@@ -377,15 +393,38 @@ def _parse_datetime(date_str: str, time_str: str) -> datetime:
 def parse_schedule(text: str):
     """
     활동 텍스트에서 '시작~종료'를 날짜 포함으로 파싱.
-    반환: {'start': datetime, 'end': datetime} 또는 None
+    반환: {'start': datetime, 'end': datetime, 'reliable': bool} 또는 None
     """
-    for pat in SCHEDULE_PATTERNS:
-        m = re.search(pat, text)
-        if m:
+    if not text:
+        return None
+
+    preferred_lines = []
+    fallback_lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if any(keyword in line for keyword in SCHEDULE_EXCLUDE_KEYWORDS):
+            continue
+        if any(keyword in line for keyword in SCHEDULE_PREFERRED_KEYWORDS):
+            preferred_lines.append(line)
+        else:
+            fallback_lines.append(line)
+
+    search_spaces = preferred_lines + fallback_lines
+    for chunk in search_spaces:
+        for pat in SCHEDULE_PATTERNS:
+            m = re.search(pat, chunk)
+            if not m:
+                continue
             s_date, s_time, e_date, e_time = m.group(1), m.group(2), m.group(3), m.group(4)
             start_dt = _parse_datetime(s_date, s_time)
             end_dt = _parse_datetime(e_date, e_time)
-            return {"start": start_dt, "end": end_dt}
+            duration_days = (end_dt.date() - start_dt.date()).days
+            reliable = duration_days < SCHEDULE_RELIABLE_DAY_THRESHOLD
+            if not reliable:
+                return {"start": start_dt, "end": end_dt, "reliable": False}
+            return {"start": start_dt, "end": end_dt, "reliable": True}
     return None
 
 def _overlap_dt(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
@@ -486,6 +525,19 @@ def _build_profile_hint(user_profile):
         lines.append(f"제약 시간대: {busy}")
     return "\n".join(lines)
 
+def _build_program_schedule(act: dict):
+    """
+    act: program dict
+    return: {'start': datetime, 'end': datetime, 'reliable': bool} or None
+    """
+    start_dt = act.get("act_start_dt")
+    end_dt = act.get("act_end_dt")
+    if start_dt and end_dt:
+        duration_days = (end_dt.date() - start_dt.date()).days
+        reliable = duration_days < SCHEDULE_RELIABLE_DAY_THRESHOLD
+        return {"start": start_dt, "end": end_dt, "reliable": reliable}
+    return parse_schedule(act.get("text"))
+
 def search_top5_programs_with_explanation(query: str, user_profile: dict):
     global recent_top5_idx_title_map, recent_top5_idx_id_map, last_queried_title
 
@@ -513,12 +565,12 @@ def search_top5_programs_with_explanation(query: str, user_profile: dict):
     scored = []
     scored_all = []
     for idx, act in enumerate(activities):
-        schedule = parse_schedule(act["text"])  # {'start': dt, 'end': dt} 또는 None
+        schedule = _build_program_schedule(act)  # {'start': dt, 'end': dt} 또는 None
 
         # --- 날짜/요일 포함 겹침 체크 ---
         has_conflict = False
         user_slots = user_profile.get("timetable") or []
-        if schedule:
+        if schedule and schedule.get("reliable", True):
             for slot in user_slots:
                 try:
                     if "start" in slot and "end" in slot:
@@ -622,6 +674,42 @@ def evaluate(golden, user_profile):
         "nDCG@5": ndcg/total, "Recall@1": recall1/total
     }
 
+def _demo_conflict_logic():
+    """
+    간단한 더미 데이터를 통해 시간표 충돌 판단이 의도대로 동작하는지 확인.
+    RUN_CONFLICT_DEMO=1 환경변수와 함께 직접 실행하면 결과를 확인할 수 있다.
+    """
+    user_slots = [{"day": "목", "startTime": "13:00", "endTime": "14:00"}]
+    dummy_programs = [
+        {
+            "id": 100,
+            "title": "짧은 목요일 특강",
+            "act_start_dt": datetime(2025, 5, 29, 13, 30),
+            "act_end_dt": datetime(2025, 5, 29, 15, 0),
+            "text": ""
+        },
+        {
+            "id": 200,
+            "title": "5일간 진행되는 장기 프로그램",
+            "act_start_dt": datetime(2025, 5, 1, 0, 0),
+            "act_end_dt": datetime(2025, 5, 5, 23, 59),
+            "text": ""
+        },
+        {
+            "id": 300,
+            "title": "텍스트 기반 일정",
+            "text": "신청기간: 2025.05.01 00:00~2025.05.20 23:59\n행사일: 2025.05.30 13:00~2025.05.30 15:00"
+        }
+    ]
+
+    for prog in dummy_programs:
+        schedule = _build_program_schedule(prog)
+        slot = user_slots[0]
+        conflict = False
+        if schedule and schedule.get("reliable", True):
+            conflict = _overlap_by_weekday(schedule, slot)
+        print(f"[데모] {prog['title']} -> schedule={schedule}, conflict={conflict}")
+
 # -----------------------------
 # FastAPI 연동용 Wrapper
 # -----------------------------
@@ -664,3 +752,6 @@ def api_run(user_profile: dict, user_question: str):
     rag = generate_answer(enriched_question, context, chunks)   
     rag["sources"] = _normalize_sources(rag.get("sources")) 
     return rag
+
+if __name__ == "__main__" and os.getenv("RUN_CONFLICT_DEMO") == "1":
+    _demo_conflict_logic()

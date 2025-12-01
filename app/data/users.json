@@ -63,5 +63,28 @@
       }
     ],
     "email": "pyeonk@konkuk.ac.kr"
+  },
+  "15": {
+    "id": 15,
+    "name": "김영록",
+    "major": "컴퓨터공학부",
+    "grade": "4",
+    "interests": [
+      "AI",
+      "백엔드"
+    ],
+    "timetable": [
+      {
+        "day": "화",
+        "startTime": "15:00",
+        "endTime": "16:30"
+      },
+      {
+        "day": "월",
+        "startTime": "15:00",
+        "endTime": "16:30"
+      }
+    ],
+    "email": "praoo800@konkuk.ac.kr"
   }
 }
