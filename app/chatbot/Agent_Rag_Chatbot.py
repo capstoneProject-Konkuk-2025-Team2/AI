@@ -98,6 +98,38 @@ FIELD_PATTERNS = {
     "수료증": r"(?:수료증)\s*[:\-]?\s*(있음|없음)" 
 }
 
+FIELD_KEYWORD_MAP = {
+    "신청기간": ["신청기간", "접수기간"],
+    "진행기간": ["진행기간", "일시", "운영기간", "행사일"],
+    "대상자": ["대상자", "대상"],
+    "장소": ["장소", "위치"],
+    "URL": ["url", "링크", "주소", "홈페이지"],
+    "KUM마일리지": ["kum 마일리지", "마일리지", "점수"],
+    "수료증": ["수료증"],
+}
+
+PROGRAM_FIELD_ORDER = [
+    "신청기간",
+    "진행기간",
+    "대상자",
+    "장소",
+    "KUM마일리지",
+    "수료증",
+    "URL",
+]
+
+PROGRAM_FIELD_LABELS = {
+    "신청기간": "신청기간",
+    "진행기간": "진행기간",
+    "대상자": "대상자",
+    "장소": "장소",
+    "KUM마일리지": "KUM 마일리지",
+    "수료증": "수료증",
+    "URL": "URL",
+}
+
+FOLLOWUP_INDEX_PATTERN = re.compile(r"(\d+)번")
+
 # -----------------------------
 # 유틸 함수
 # -----------------------------
@@ -447,6 +479,7 @@ program_embeddings = []  # [CHANGED STEP1] 확장 텍스트 임베딩 캐시
 recent_top5_idx_title_map = {}
 recent_top5_idx_id_map = {}   # 후속 질의에 쓸 수 있는 id
 last_queried_title = None
+last_answered_program = None
 
 # -----------------------------
 # 필드 추출 & 단답
@@ -459,28 +492,203 @@ def extract_fields(text: str) -> dict:
             out[k] = m.group(1).strip()
     return out
 
-def _short_field_answer(query: str, fields: dict):
-    for k in FIELD_PATTERNS.keys():
-        if k in query and fields.get(k):
-            return f"{k}: {fields[k]}"
+def _short_field_answer(query: str, fields: dict, act: dict = None):
+    if not query:
+        return None
+    lower_q = query.lower()
+    for field, keywords in FIELD_KEYWORD_MAP.items():
+        if any(keyword.lower() in lower_q for keyword in keywords):
+            value = _get_field_value(field, act, fields)
+            if value:
+                label = PROGRAM_FIELD_LABELS.get(field, field)
+                return f"{label}: {value}"
     return None
 
-def answer_program_question_by_title(query: str):
-    global last_queried_title
+
+def _ensure_activities_loaded():
+    global activities, program_embeddings
+    if not activities:
+        activities, program_embeddings = initialize_indexes()
+
+
+def _get_activity_by_id(program_id):
+    if program_id is None:
+        return None
+    pid = str(program_id)
     for act in activities:
-        if _normalize(act["title"]) in _normalize(query) or (last_queried_title and _normalize(last_queried_title) in _normalize(query)):
-            fields = extract_fields(act["text"])
-            short = _short_field_answer(query, fields)
-            if short:
-                return short
-            # fallback LLM
-            prompt = f"[활동정보]\n{act['text']}\n\n[질문]\n{query}\n\n자료에 기반해 1~2문장으로 답하세요."
-            resp = client.chat.completions.create(
-                model="gpt-3.5-turbo", temperature=0, max_tokens=150,
-                messages=[{"role":"system","content":"간단한 비교과 안내 도우미"},
-                          {"role":"user","content":prompt}]
-            )
-            return resp.choices[0].message.content.strip()
+        if str(act.get("id")) == pid:
+            return act
+    return None
+
+
+def _resolve_program_by_index(query: str):
+    match = FOLLOWUP_INDEX_PATTERN.search(query or "")
+    if not match:
+        return None, None
+    idx = int(match.group(1))
+    if not recent_top5_idx_id_map:
+        return None, "최근에 추천해 드린 비교과 목록이 없습니다. 먼저 '비교과 추천해줘' 같이 요청해 주세요."
+    program_id = recent_top5_idx_id_map.get(idx)
+    if not program_id:
+        return None, f"{idx}번 프로그램은 최근 추천 목록에서 찾을 수 없습니다. 번호를 다시 확인해 주세요."
+    act = _get_activity_by_id(program_id)
+    if act is None:
+        return None, "선택한 프로그램 정보를 찾을 수 없습니다. 다시 추천을 요청해 주세요."
+    return act, None
+
+
+def _title_norm_variants(title: str):
+    variants = []
+    if not title:
+        return variants
+    base = _normalize(title)
+    if base:
+        variants.append(base)
+    stripped = re.sub(r"^\[[^\]]+\]\s*", "", title or "").strip()
+    stripped_norm = _normalize(stripped)
+    if stripped_norm and stripped_norm not in variants:
+        variants.append(stripped_norm)
+    return variants
+
+
+def _tokenize_for_match(text: str):
+    if not text:
+        return []
+    normed = unicodedata.normalize("NFKC", text).lower()
+    return [tok for tok in re.split(r"[^\w가-힣]+", normed) if tok]
+
+
+def _match_program_by_title(query_norm: str, raw_query: str):
+    if not query_norm:
+        return None
+
+    def _variants_match(title: str):
+        for variant in _title_norm_variants(title):
+            if not variant:
+                continue
+            if variant in query_norm or query_norm in variant:
+                return True
+        return False
+
+    for act in activities:
+        if _variants_match(act.get("title", "")):
+            return act
+
+    query_tokens = set(_tokenize_for_match(raw_query))
+    if query_tokens:
+        for act in activities:
+            title_tokens = set(_tokenize_for_match(act.get("title", "")))
+            if not title_tokens:
+                continue
+            overlap = title_tokens & query_tokens
+            if len(title_tokens) == 1 and overlap:
+                return act
+            if len(title_tokens) >= 2 and len(overlap) >= 2:
+                return act
+
+    if last_queried_title:
+        if _variants_match(last_queried_title):
+            last_norms = set(_title_norm_variants(last_queried_title))
+            for act in activities:
+                if set(_title_norm_variants(act.get("title", ""))) & last_norms:
+                    return act
+    return None
+
+
+def _get_field_value(field_key: str, act: dict, fields: dict):
+    value = (fields or {}).get(field_key)
+    if not value and field_key == "URL" and act:
+        value = act.get("url")
+    if not value:
+        return None
+    if field_key == "KUM마일리지" and not str(value).endswith("점"):
+        value = f"{value}점"
+    return value
+
+
+def _summarize_description(act: dict):
+    if not act:
+        return ""
+    desc = (act.get("description") or "").strip()
+    if not desc:
+        return ""
+    desc = re.sub(r"\s+", " ", desc)
+    if len(desc) > 220:
+        return desc[:200].rstrip() + "..."
+    return desc
+
+
+def _format_program_details(act: dict, fields: dict):
+    if not act:
+        return ""
+    lines = []
+    title = act.get("title")
+    if title:
+        lines.append(f"[프로그램명] {title}")
+    for field_key in PROGRAM_FIELD_ORDER:
+        value = _get_field_value(field_key, act, fields)
+        if value:
+            label = PROGRAM_FIELD_LABELS.get(field_key, field_key)
+            lines.append(f"{label}: {value}")
+    summary = _summarize_description(act)
+    if summary:
+        lines.append(f"설명: {summary}")
+    return "\n".join(lines).strip()
+
+
+def _program_sources(act: dict):
+    if not act:
+        return []
+    return _normalize_sources([{
+        "id": act.get("id"),
+        "title": act.get("title", ""),
+        "url": act.get("url", "")
+    }])
+
+def answer_program_question_by_title(query: str):
+    global last_queried_title, last_answered_program
+    last_answered_program = None
+    if not query:
+        return "자료에 없음"
+
+    _ensure_activities_loaded()
+
+    candidate, index_message = _resolve_program_by_index(query)
+    if index_message:
+        return index_message
+
+    if not candidate:
+        norm_query = _normalize(query)
+        candidate = _match_program_by_title(norm_query, query)
+
+    if not candidate:
+        return "자료에 없음"
+
+    last_queried_title = candidate.get("title") or last_queried_title
+
+    fields = extract_fields(candidate.get("text", ""))
+    short = _short_field_answer(query, fields, candidate)
+    if short:
+        last_answered_program = candidate
+        return short
+
+    overview = _format_program_details(candidate, fields)
+    if overview:
+        last_answered_program = candidate
+        return overview
+
+    prompt = f"[활동정보]\n{candidate.get('text','')}\n\n[질문]\n{query}\n\n자료에 기반해 1~2문장으로 답하세요."
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo", temperature=0, max_tokens=150,
+        messages=[
+            {"role": "system", "content": "간단한 비교과 안내 도우미"},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    answer = resp.choices[0].message.content.strip()
+    if answer:
+        last_answered_program = candidate
+        return answer
     return "자료에 없음"
 
 # -----------------------------
@@ -710,6 +918,24 @@ def _demo_conflict_logic():
             conflict = _overlap_by_weekday(schedule, slot)
         print(f"[데모] {prog['title']} -> schedule={schedule}, conflict={conflict}")
 
+
+def _demo_followup_sequence():
+    """
+    간단한 후속 질의 시나리오를 출력한다.
+    RUN_FOLLOWUP_DEMO=1 환경변수로 실행한다.
+    """
+    demo_profile = {"interests": ["SW/IT", "데이터"], "timetable": []}
+    questions = [
+        "비교과 추천해줘",
+        "1번 알려줘",
+        "릴레이 직무 컨설팅_SW/IT 데이터 신청기간 알려줘",
+    ]
+    for idx, q in enumerate(questions, start=1):
+        print(f"\n[{idx}] 질문: {q}")
+        resp = api_run(demo_profile, q)
+        print(resp.get("answer"))
+
+
 # -----------------------------
 # FastAPI 연동용 Wrapper
 # -----------------------------
@@ -721,7 +947,8 @@ def api_run(user_profile: dict, user_question: str):
     # 필드 기반 질문이면 우선 처리
     field_answer = answer_program_question_by_title(user_question)
     if field_answer != "자료에 없음":
-        return {"answer": field_answer, "sources": []}
+        sources = _program_sources(last_answered_program)
+        return {"answer": field_answer, "sources": sources}
 
     # 추천 Top-5
     reco_text, _, reco_structured, fallback_structured, fallback_text = search_top5_programs_with_explanation(user_question, user_profile)
@@ -755,3 +982,5 @@ def api_run(user_profile: dict, user_question: str):
 
 if __name__ == "__main__" and os.getenv("RUN_CONFLICT_DEMO") == "1":
     _demo_conflict_logic()
+if __name__ == "__main__" and os.getenv("RUN_FOLLOWUP_DEMO") == "1":
+    _demo_followup_sequence()
