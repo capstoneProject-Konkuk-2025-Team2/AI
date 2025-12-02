@@ -128,6 +128,16 @@ PROGRAM_FIELD_LABELS = {
     "URL": "URL",
 }
 
+FIELD_SENTENCE_TEMPLATES = {
+    "신청기간": "신청 기간은 {value}입니다.",
+    "진행기간": "{value} 동안 진행돼요.",
+    "대상자": "참여 대상은 {value}입니다.",
+    "장소": "장소는 {value}로 예정되어 있어요.",
+    "KUM마일리지": "또한 KUM 마일리지 {value}를 받을 수 있어요.",
+    "수료증": "수료증은 {value}이에요.",
+    "URL": "자세한 안내와 신청은 {value}에서 확인할 수 있어요.",
+}
+
 FOLLOWUP_INDEX_PATTERN = re.compile(r"(\d+)번")
 
 # -----------------------------
@@ -500,8 +510,10 @@ def _short_field_answer(query: str, fields: dict, act: dict = None):
         if any(keyword.lower() in lower_q for keyword in keywords):
             value = _get_field_value(field, act, fields)
             if value:
-                label = PROGRAM_FIELD_LABELS.get(field, field)
-                return f"{label}: {value}"
+                title = act.get("title") if act else None
+                sentence = _render_field_sentence(field, value, title)
+                if sentence:
+                    return sentence
     return None
 
 
@@ -606,6 +618,23 @@ def _get_field_value(field_key: str, act: dict, fields: dict):
     return value
 
 
+def _render_field_sentence(field_key: str, value: str, program_title: str = None):
+    if not value:
+        return ""
+    program = f"'{program_title}'" if program_title else "이 프로그램"
+    if field_key == "수료증":
+        normalized = value.strip()
+        if normalized == "있음":
+            return f"{program}은 수료증이 발급돼요."
+        if normalized == "없음":
+            return f"{program}은 수료증이 제공되지는 않아요."
+    template = FIELD_SENTENCE_TEMPLATES.get(field_key)
+    if template:
+        return template.format(program=program, value=value)
+    label = PROGRAM_FIELD_LABELS.get(field_key, field_key)
+    return f"{program}의 {label}은 {value}입니다."
+
+
 def _summarize_description(act: dict):
     if not act:
         return ""
@@ -621,18 +650,20 @@ def _summarize_description(act: dict):
 def _format_program_details(act: dict, fields: dict):
     if not act:
         return ""
-    lines = []
     title = act.get("title")
-    if title:
-        lines.append(f"[프로그램명] {title}")
+    program = f"'{title}'" if title else "이 프로그램"
+    lines = [f"{program} 프로그램에 대해 간단히 안내드릴게요."]
     for field_key in PROGRAM_FIELD_ORDER:
         value = _get_field_value(field_key, act, fields)
-        if value:
-            label = PROGRAM_FIELD_LABELS.get(field_key, field_key)
-            lines.append(f"{label}: {value}")
+        if not value:
+            continue
+        sentence = _render_field_sentence(field_key, value, title)
+        if sentence:
+            lines.append(sentence)
     summary = _summarize_description(act)
     if summary:
-        lines.append(f"설명: {summary}")
+        lines.append(f"간단히 요약하면 {summary}")
+    lines.append("다른 부분이 궁금하면 언제든지 물어봐 주세요!")
     return "\n".join(lines).strip()
 
 
@@ -694,20 +725,40 @@ def answer_program_question_by_title(query: str):
 # -----------------------------
 # 추천 검색 (Top-5) - 시간표 필터 부분만 교체
 # -----------------------------
+def _format_recommendation_line(rank: int, act: dict):
+    fields = extract_fields(act.get("text", ""))
+    bits = []
+    if fields.get("신청기간"):
+        bits.append(f"신청 {fields['신청기간']}")
+    if fields.get("진행기간"):
+        bits.append(f"진행 {fields['진행기간']}")
+    if fields.get("장소"):
+        bits.append(f"장소 {fields['장소']}")
+    detail = " / ".join(bits) if bits else "세부 일정은 추후 안내해 드릴게요."
+    title = act.get("title", "프로그램")
+    return f"{rank}번) {title} - {detail}"
+
+
 def _convert_candidates_to_output(candidates, topk=5):
     if not candidates:
         return "", [], []
     ordered = sorted(candidates, key=lambda x: x[3], reverse=True)[:topk]
-    text_out = "\n".join([f"{i+1}. {t}" for i, (_, _, t, _) in enumerate(ordered)])
+    friendly_lines = []
+    if ordered:
+        friendly_lines.append("지금 추천드릴 만한 프로그램을 정리해 봤어요:")
     ids_out = [tid for _, tid, _, _ in ordered]
     structured = []
-    for idx, tid, title, _ in ordered:
+    for display_idx, (idx, tid, title, _) in enumerate(ordered, start=1):
         act = activities[idx]
+        friendly_lines.append(_format_recommendation_line(display_idx, act))
         structured.append({
             "id": tid,
             "title": title,
             "url": act.get("url", "")
         })
+    if friendly_lines:
+        friendly_lines.append("특정 번호나 프로그램명이 궁금하면 말씀해 주세요!")
+    text_out = "\n".join(friendly_lines) if friendly_lines else ""
     return text_out, ids_out, structured
 
 def _summarize_timetable_slots(slots):
@@ -959,12 +1010,12 @@ def api_run(user_profile: dict, user_question: str):
         interests_desc = ", ".join(user_profile.get("interests", [])) if user_profile.get("interests") else "없음"
         busy_desc = _summarize_timetable_slots(user_profile.get("timetable") or [])
         notice_lines = [
-            "사용자 시간표와 겹치지 않는 비교과는 찾지 못했습니다.",
-            f"관심사: {interests_desc}"
+            "등록된 바쁜 시간과 겹치지 않는 프로그램은 당장은 찾지 못했어요.",
+            f"관심사 정보: {interests_desc}"
         ]
         if busy_desc != "없음":
-            notice_lines.append(f"등록된 바쁜 시간: {busy_desc}")
-        notice_lines.append("아래 프로그램은 시간표 충돌이 있지만 관심사에 가까운 참고용 추천입니다.")
+            notice_lines.append(f"현재 바쁜 시간: {busy_desc}")
+        notice_lines.append("대신 관심사에 가까운 후보를 안내드릴게요. 실제 일정과 충돌하지 않는지 한 번만 더 확인해 주세요!")
         fallback_answer = "\n".join(notice_lines) + "\n\n" + fallback_text
         return {"answer": fallback_answer, "sources": _normalize_sources(fallback_structured)}
 
